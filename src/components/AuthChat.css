@@ -1,0 +1,93 @@
+/* src/components/AuthChat.css */
+
+.chat-container {
+  max-width: 500px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  height: 400px; /* Altura fixa para o chat */
+  background: #f9f9f9;
+}
+
+.message-list {
+  flex-grow: 1;
+  overflow-y: auto; /* A mágica do scroll */
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Base para todas as mensagens */
+.message {
+  padding: 8px 12px;
+  border-radius: 18px;
+  margin-bottom: 8px;
+  max-width: 75%;
+  line-height: 1.4;
+}
+
+/* Mensagem do BOT (esquerda) */
+.message.bot {
+  background-color: #e5e5ea;
+  color: #000;
+  align-self: flex-start;
+}
+
+/* Mensagem do USUÁRIO (direita) */
+.message.user {
+  background-color: #007bff; /* Azul */
+  color: white;
+  align-self: flex-end;
+}
+
+.initial-buttons {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px; /* Espaço entre os botões */
+}
+
+.initial-buttons button {
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  background-color: #007bff;
+  color: white;
+  font-size: 16px;
+}
+.initial-buttons button:hover {
+  background-color: #0056b3;
+}
+
+
+.input-form {
+  display: flex;
+  border-top: 1px solid #ccc;
+  padding: 10px;
+  background: #fff;
+}
+
+.input-form input {
+  flex-grow: 1;
+  border: 1px solid #ccc;
+  border-radius: 18px;
+  padding: 10px 15px;
+  font-size: 16px;
+  margin-right: 10px;
+}
+
+.input-form button {
+  border: none;
+  background-color: #007bff;
+  color: white;
+  border-radius: 50%; /* Botão redondo */
+  width: 44px;
+  height: 44px;
+  font-size: 20px;
+  cursor: pointer;
+}
+.input-form button:disabled {
+  background-color: #aaa;
+}
