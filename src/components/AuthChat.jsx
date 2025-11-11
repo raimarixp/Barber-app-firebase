@@ -100,13 +100,28 @@ function AuthChat() {
 
     } catch (error) {
       console.error("Erro na autenticação:", error.code, error.message);
-      // (Toda a lógica 'catch' inteligente continua EXATAMENTE a mesma)
+      
+      // Lógica "Inteligente" ATUALIZADA
       if (error.code === 'auth/email-already-in-use') {
+        // Tentou cadastrar com email que já existe
         addMessage("Este e-mail já está cadastrado! Vamos tentar o login. Por favor, digite sua senha:", "bot");
         setStep('login_password');
-      } else if (error.code === 'auth/wrong-password') {
-        addMessage("Senha incorreta. Tente novamente:", "bot");
-      } else {
+      } 
+      else if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        // Tentou logar com senha errada OU email/senha não bate
+        addMessage("O e-mail ou a senha estão incorretos. Por favor, tente novamente:", "bot");
+        
+        // Permite que o usuário tente de novo sem reiniciar o fluxo
+        if (step === 'login_password') {
+          // Apenas espere o usuário digitar a senha correta
+        } else {
+          // Se o erro veio de outro lugar, reinicie
+          setStep('login_email'); 
+          addMessage("Qual o seu email?", "bot");
+        }
+      } 
+      else {
+        // Para qualquer outro erro (rede, etc.)
         addMessage("Ops, algo deu errado. Vamos tentar do início.", "bot");
         addMessage("Você já tem uma conta?", "bot");
         setStep('initial');

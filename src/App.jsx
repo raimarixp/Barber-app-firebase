@@ -1,67 +1,56 @@
-// src/App.jsx (Solução Definitiva com onSnapshot)
+// src/App.jsx (Com a correção do H2)
 
 import React, { useState, useEffect } from 'react';
 import { auth, db } from './firebase-config'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-// 1. Importe 'onSnapshot' em vez de 'getDoc'
 import { doc, onSnapshot } from "firebase/firestore"; 
 
-// Componentes 
+// Nossos componentes de painel
 import AuthChat from './components/AuthChat';
-import AdminPanel from './components/AdminPanel';
-import ClientPanel from './components/ClientPanel';
+import AdminPanel from './components/AdminPanel'; 
+import ClientPanel from './components/ClientPanel'; 
 import ProfessionalPanel from './components/ProfessionalPanel';
 
+// CSS do Chat
+import './components/AuthChat.css';
 
 function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [userData, setUserData] = useState(null); 
   const [isLoading, setIsLoading] = useState(true);
 
-  // Vigia (AGORA COM 'onSnapshot' PARA SER EM TEMPO REAL)
+  // Vigia (onSnapshot)
   useEffect(() => {
-    // 2. 'onAuthStateChanged' continua sendo o gatilho principal
     const authUnsubscribe = onAuthStateChanged(auth, (user) => {
-      let firestoreUnsubscribe = null; // Crie um 'unsubscribe' para o Firestore
+      let firestoreUnsubscribe = null; 
 
       if (user) {
-        // Usuário está logado (Auth)
         setCurrentUser(user);
-        
-        // 3. AGORA, 'onSnapshot' fica "ouvindo" o documento do usuário
         const userDocRef = doc(db, "users", user.uid);
         
-        // 'onSnapshot' dispara imediatamente E sempre que o doc mudar
         firestoreUnsubscribe = onSnapshot(userDocRef, (docSnap) => {
           if (docSnap.exists()) {
-            // O documento existe (ou foi CRIADO AGORA)
             const fetchedData = docSnap.data();
             setUserData(fetchedData); 
             console.log("VIGIA (Snapshot): Dados do usuário atualizados. Role:", fetchedData.role);
           } else {
-            // O usuário está logado, mas o doc não existe AINDA
-            // (Isso acontece por 1 segundo durante o cadastro)
             console.warn("VIGIA (Snapshot): Usuário logado, aguardando dados do Firestore...");
-            setUserData(null); // Garante que userData é null
+            setUserData(null);
           }
-          setIsLoading(false); // Só pare de carregar após o snapshot
+          setIsLoading(false);
         }, (error) => {
-          // Em caso de erro (Ad-Blocker, etc.)
           console.error("VIGIA (Snapshot): Erro ao ouvir dados!", error);
           setUserData(null);
           setIsLoading(false);
         });
 
       } else {
-        // Usuário está deslogado
         setCurrentUser(null);
         setUserData(null);
-        setIsLoading(false); // Pare de carregar
+        setIsLoading(false); 
         console.log("VIGIA (AuthState): Ninguém logado.");
       }
       
-      // 4. Retorne a limpeza do 'firestoreUnsubscribe'
-      // Isso impede "vazamento de memória"
       return () => {
         if (firestoreUnsubscribe) {
           firestoreUnsubscribe();
@@ -69,11 +58,10 @@ function App() {
       };
     });
     
-    // Retorne a limpeza do 'authUnsubscribe'
     return () => authUnsubscribe();
-  }, []); // O '[]' vazio ainda é crucial
+  }, []); 
 
-  // Logout (sem mudanças)
+  // Logout
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -83,12 +71,12 @@ function App() {
     }
   };
 
-  // Loading (sem mudanças)
+  // Loading
   if (isLoading) {
     return <div style={{ padding: '20px' }}><h1>Carregando...</h1></div>;
   }
 
-  // ---- RENDERIZAÇÃO CONDICIONAL (AGORA MAIS ROBUSTA) ----
+  // ---- RENDERIZAÇÃO ----
 
   // 1. Deslogado
   if (!currentUser) {
@@ -99,14 +87,13 @@ function App() {
     );
   }
 
-  // 2. Logado, mas dados do Firestore ainda não chegaram (ou falharam)
+  // 2. Logado, mas dados do Firestore ainda não chegaram
   if (currentUser && !userData) {
     return (
       <div>
         <h1>Projeto Barbearia</h1><hr />
         <h2>Carregando perfil...</h2>
         <p>Logado como: {currentUser.email}</p>
-        <p>(Se esta tela demorar, verifique se seu Ad-Blocker está desativado e tente novamente).</p>
         <button onClick={handleLogout}>Sair (Logout)</button>
       </div>
     );
@@ -122,9 +109,15 @@ function App() {
           <button onClick={handleLogout}>Sair (Logout)</button>
         </div>
         <hr />
-        {userData.role === 'admin' && <div><h2><AdminPanel /></h2></div>}
-        {userData.role === 'client' && <div><h2><ClientPanel /></h2></div>}
-        {userData.role === 'professional' && <div><h2><ProfessionalPanel /></h2></div>}
+
+        {/* --- A CORREÇÃO ESTÁ AQUI --- */}
+        {/* Removemos o <h2> e o <div> desnecessários */}
+        
+        {userData.role === 'admin' && <AdminPanel />}
+        
+        {userData.role === 'client' && <ClientPanel />}
+        
+        {userData.role === 'professional' && <ProfessionalPanel />}
       </div>
     );
   }
