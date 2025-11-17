@@ -1,7 +1,7 @@
 // src/components/ProfessionalPanel/ProfessionalPanel.jsx
-// (Código Completo com Horários, Serviços e Bloqueios)
+// (COMPLETO - Com Agenda, Horários, Serviços e Bloqueios)
 
-import { useState, useEffect, useCallback } from 'react'; // React apagadinho removido
+import { useState, useEffect, useCallback } from 'react';
 import styles from './ProfessionalPanel.module.css'; 
 import { db, auth } from '../../firebase/firebase-config';
 import { 
@@ -9,7 +9,6 @@ import {
   getDoc, writeBatch, addDoc, onSnapshot,
   query, deleteDoc, Timestamp, where
 } from "firebase/firestore";
-
 import { useShop } from '../../App.jsx';
 
 const daysOfWeek = [
@@ -36,6 +35,8 @@ function ProfessionalPanel() {
   const [blockType, setBlockType] = useState('recurring'); 
   const [blockDay, setBlockDay] = useState('monday');
   const [blockDate, setBlockDate] = useState(new Date().toISOString().split('T')[0]);
+  const [todayAppointments, setTodayAppointments] = useState([]);
+  const [isLoadingAgenda, setIsLoadingAgenda] = useState(true);
 
   const professionalId = auth.currentUser.uid;
 
@@ -97,6 +98,7 @@ function ProfessionalPanel() {
   }, [professionalId]);
   
   const fetchBlockedTimes = useCallback(() => {
+    if (!professionalId) return; 
     setIsLoadingBlocks(true);
     const blocksCollectionRef = collection(db, "professionals", professionalId, "blockedTimes");
     const unsubscribe = onSnapshot(blocksCollectionRef, (querySnapshot) => {
@@ -113,15 +115,62 @@ function ProfessionalPanel() {
     return unsubscribe;
   }, [professionalId]);
 
+  // Efeito Principal (Carrega tudo)
   useEffect(() => {
-    if (managedShopId) {
-      fetchWorkingHours();
-      fetchAllServices();
-      fetchMyServices();
-      const unsubscribeBlocks = fetchBlockedTimes();
-      return () => unsubscribeBlocks();
-    }
-  }, [managedShopId, fetchWorkingHours, fetchAllServices, fetchMyServices, fetchBlockedTimes]);
+    if (!managedShopId) return;
+    
+    fetchWorkingHours();
+    fetchAllServices();
+    fetchMyServices();
+    const unsubscribeBlocks = fetchBlockedTimes();
+    
+    setIsLoadingAgenda(true);
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    
+    const appointmentsQuery = query(
+      collection(db, "appointments"),
+      where("professionalId", "==", professionalId),
+      where("startTime", ">=", Timestamp.fromDate(todayStart)),
+      where("startTime", "<=", Timestamp.fromDate(todayEnd)),
+      where("status", "in", ["confirmed", "checked_in"])
+    );
+
+    const unsubscribeAgenda = onSnapshot(appointmentsQuery, async (querySnapshot) => {
+      const appointmentsList = [];
+      for (const appDoc of querySnapshot.docs) {
+        const appData = { id: appDoc.id, ...appDoc.data() };
+        
+        try {
+          const userDoc = await getDoc(doc(db, "users", appData.clientId));
+          appData.clientName = userDoc.exists() ? userDoc.data().displayName : "Cliente";
+        } catch (e) { appData.clientName = "Cliente"; }
+        
+        try {
+          const serviceDoc = await getDoc(doc(db, "services", appData.serviceId));
+          appData.serviceName = serviceDoc.exists() ? serviceDoc.data().name : "Serviço";
+        } catch (e) { appData.serviceName = "Serviço"; }
+        
+        appointmentsList.push(appData);
+      }
+      
+      appointmentsList.sort((a, b) => a.startTime.seconds - b.startTime.seconds);
+      setTodayAppointments(appointmentsList);
+      setIsLoadingAgenda(false);
+    }, (error) => {
+      console.error("Erro ao ouvir agenda: ", error);
+      alert("Erro ao carregar agenda. Verifique o console (F12) para criar um índice.");
+      setIsLoadingAgenda(false);
+    });
+
+    return () => {
+      if (unsubscribeBlocks) unsubscribeBlocks();
+      unsubscribeAgenda();
+    };
+    
+  }, [managedShopId, professionalId, fetchWorkingHours, fetchAllServices, fetchMyServices, fetchBlockedTimes]);
   
   // --- Funções de SALVAR ---
   const handleSaveAllHours = async () => {
@@ -211,10 +260,114 @@ function ProfessionalPanel() {
     }
   };
 
+  // Funções de Ação da Agenda
+  const handleCheckIn = async (appointmentId) => {
+    try {
+      const appDocRef = doc(db, "appointments", appointmentId);
+      await updateDoc(appDocRef, {
+        status: "checked_in"
+      });
+    } catch (error) {
+      console.error("Erro ao fazer check-in: ", error);
+    }
+  };
+  
+  const handleCompleteService = async (appointmentId) => {
+    if (!window.confirm("Confirmar que este serviço foi concluído?")) return;
+    try {
+      const appDocRef = doc(db, "appointments", appointmentId);
+      await updateDoc(appDocRef, {
+        status: "completed"
+      });
+    } catch (error) {
+      console.error("Erro ao completar serviço: ", error);
+    }
+  };
+
+  const handleCancelService = async (appointmentId) => {
+    if (!window.confirm("Tem certeza que quer CANCELAR este agendamento?")) return;
+    try {
+      const appDocRef = doc(db, "appointments", appointmentId);
+      await updateDoc(appDocRef, {
+        status: "cancelled_by_pro"
+      });
+    } catch (error) {
+      console.error("Erro ao cancelar serviço: ", error);
+    }
+  };
+
+
   // --- RENDERIZAÇÃO (JSX) ---
   return (
     <div>
-      {/* Seção 1: Meus Horários (COMPLETA) */}
+      {/* Seção 4: Minha Agenda de Hoje */}
+      <div className={styles.panel}>
+        <h3 className={styles.sectionTitle}>Minha Agenda de Hoje</h3>
+        {isLoadingAgenda ? <p>Carregando agenda...</p> : (
+          <div className={styles.agendaContainer}>
+            {todayAppointments.length === 0 && <p>Nenhum agendamento para hoje.</p>}
+            
+            {todayAppointments.map(app => (
+              <div 
+                key={app.id} 
+                className={`
+                  ${styles.agendaCard} 
+                  ${app.status === 'checked_in' ? styles.statusCheckedIn : styles.statusConfirmed}
+                `}
+              >
+                <h4>
+                  {app.startTime.toDate().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}
+                  - {app.clientName}
+                </h4>
+                <p><strong>Serviço:</strong> {app.serviceName}</p>
+                
+                {app.status === 'confirmed' && (
+                  <>
+                    <p style={{color: 'blue', fontWeight: 'bold'}}>Aguardando chegada...</p>
+                    <div className={styles.agendaActions}>
+                      <button 
+                        className={styles.checkInButton}
+                        onClick={() => handleCheckIn(app.id)}
+                      >
+                        Fazer Check-in
+                      </button>
+                      <button 
+                        className={styles.cancelButton}
+                        onClick={() => handleCancelService(app.id)}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </>
+                )}
+                
+                {app.status === 'checked_in' && (
+                  <>
+                    <p style={{color: 'green', fontWeight: 'bold'}}>CLIENTE NA LOJA</p>
+                    <div className={styles.agendaActions}>
+                      <button 
+                        className={styles.completeButton}
+                        onClick={() => handleCompleteService(app.id)}
+                      >
+                        Concluir Serviço
+                      </button>
+                       <button 
+                        className={styles.cancelButton}
+                        onClick={() => handleCancelService(app.id)}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </>
+                )}
+                
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Seção 1: Meus Horários */}
       <div className={styles.panel}>
         <h3 className={styles.sectionTitle}>Meu Horário de Trabalho</h3>
         {isLoadingHours ? <p>Carregando horários...</p> : (
@@ -268,7 +421,7 @@ function ProfessionalPanel() {
         )}
       </div>
 
-      {/* Seção 2: Meus Serviços (COMPLETA) */}
+      {/* Seção 2: Meus Serviços */}
       <div className={styles.panel}>
         <h3 className={styles.sectionTitle}>Meus Serviços</h3>
         <p>Selecione os serviços que você oferece.</p>
@@ -303,7 +456,7 @@ function ProfessionalPanel() {
         )}
       </div>
 
-      {/* Seção 3: Meus Bloqueios (COMPLETA) */}
+      {/* Seção 3: Meus Bloqueios */}
       <div className={styles.panel}>
         <h3 className={styles.sectionTitle}>Meus Bloqueios</h3>
         <p>Adicione pausas (ex: Almoço) ou bloqueios de dia único (ex: Dentista).</p>

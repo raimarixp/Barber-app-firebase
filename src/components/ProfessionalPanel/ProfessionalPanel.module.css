@@ -124,3 +124,82 @@
   background: #ff4d4d;
   color: white;
 }
+
+/* --- FIM DE ESTILOS PARA BLOQUEIOS --- */
+
+
+/* --- NOVOS ESTILOS PARA A AGENDA --- ------------------------------------------------------*/
+.agendaContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agendaCard {
+  border-radius: 8px;
+  padding: 15px;
+  background-color: #f9f9f9;
+  border-left: 5px solid; /* A borda que muda de cor */
+}
+
+/* Status: Cliente ainda não chegou */
+.statusConfirmed {
+  border-left-color: #007bff; /* Azul */
+}
+
+/* Status: Cliente FEZ CHECK-IN e está na loja */
+.statusCheckedIn {
+  border-left-color: #28a745; 
+  background-color: #eaf8ee; 
+}
+
+.agendaCard h4 {
+  margin: 0 0 10px 0;
+}
+.agendaCard p {
+  margin: 5px 0;
+}
+
+.agendaActions {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+}
+
+.completeButton {
+  padding: 8px 12px;
+  background-color: #28a745;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.completeButton:hover {
+  background-color: #218838;
+}
+
+.cancelButton {
+  padding: 8px 12px;
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.cancelButton:hover {
+  background-color: #c82333;
+}
+
+.checkInButton {
+  padding: 8px 12px;
+  background-color: #007bff; /* Azul */
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.checkInButton:hover {
+  background-color: #0056b3;
+}
+/* --- FIM DE NOVOS ESTILOS PARA A AGENDA -------------------------------------------------- */
+

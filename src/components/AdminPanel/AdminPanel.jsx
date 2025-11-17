@@ -1,18 +1,44 @@
 // src/components/AdminPanel/AdminPanel.jsx
-// (Refatorado para "Sistema de Convite" - VERSÃO CORRIGIDA)
+// (COMPLETO - Com Perfil Editável, Serviços, Convites e Pagamento)
 
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import styles from './AdminPanel.module.css';
 import { db } from '../../firebase/firebase-config';
 import { 
   addDoc, collection, getDocs, doc, 
-  deleteDoc, // Removido 'updateDoc', 'setDoc' que não são mais usados aqui
-  query, where, onSnapshot, Timestamp
+  updateDoc, deleteDoc,
+  query, where, onSnapshot, Timestamp,
+  getDoc, writeBatch, deleteField,
+  setDoc
 } from "firebase/firestore"; 
 import { useShop } from '../../App.jsx';
 
+// --- Função Helper do Cloudinary ---
+const uploadImageToCloudinary = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('upload_preset', import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET);
+  const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+  const apiUrl = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
+  try {
+    const response = await fetch(apiUrl, { method: 'POST', body: formData });
+    const data = await response.json();
+    if (data.secure_url) return data.secure_url;
+    else throw new Error(data.error.message || 'Falha no upload');
+  } catch (error) {
+    console.error("Erro no upload do Cloudinary:", error);
+    throw error;
+  }
+};
+
 function AdminPanel() {
   const { managedShopId } = useShop();
+
+  // --- Estados do Perfil da Loja ---
+  const [shopProfile, setShopProfile] = useState(null);
+  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  const [newLogoFile, setNewLogoFile] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
 
   // --- Estados de Serviços ---
   const [serviceName, setServiceName] = useState('');
@@ -28,7 +54,33 @@ function AdminPanel() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [isLoadingInvite, setIsLoadingInvite] = useState(false);
 
-  // --- LÓGICA DE SERVIÇOS ---
+  // --- Estados de Pagamento ---
+  const [mpAccessToken, setMpAccessToken] = useState('');
+  const [isLoadingPayment, setIsLoadingPayment] = useState(false);
+  const [isSavingKeys, setIsSavingKeys] = useState(false);
+
+  // --- LÓGICA DE CARREGAMENTO ---
+
+  // 1. Busca os dados da loja
+  const fetchShopProfile = useCallback(async () => {
+    if (!managedShopId) return;
+    setIsLoadingProfile(true);
+    try {
+      const shopDocRef = doc(db, "barbershops", managedShopId);
+      const docSnap = await getDoc(shopDocRef);
+      if (docSnap.exists()) {
+        setShopProfile(docSnap.data());
+      } else {
+        console.error("Erro: Dono logado, mas loja não encontrada!");
+      }
+    } catch (error) { 
+      console.error("Erro ao buscar perfil da loja: ", error); 
+    } finally { 
+      setIsLoadingProfile(false); 
+    }
+  }, [managedShopId]);
+
+  // 2. Busca os serviços
   const fetchServices = useCallback(async () => {
     if (!managedShopId) return; 
     setIsLoadingServices(true);
@@ -40,37 +92,19 @@ function AdminPanel() {
       const querySnapshot = await getDocs(servicesQuery);
       const servicesList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setServices(servicesList);
-    } catch (error) { console.error("Erro ao buscar serviços: ", error); } 
-    finally { setIsLoadingServices(false); }
+    } catch (error) { 
+      console.error("Erro ao buscar serviços: ", error); 
+    } finally { 
+      setIsLoadingServices(false); 
+    }
   }, [managedShopId]);
 
-  const handleAddService = async (e) => {
-    e.preventDefault();
-    setIsLoadingServices(true);
-    try {
-      await addDoc(collection(db, "services"), {
-        name: serviceName,
-        price: Number(servicePrice),
-        duration: Number(serviceDuration),
-        barbershopId: managedShopId
-      });
-      alert("Serviço adicionado com sucesso!");
-      setServiceName(''); setServicePrice(''); setServiceDuration('');
-      fetchServices(); // Recarrega a lista
-    } catch (error) { 
-      console.error("Erro ao adicionar serviço: ", error); 
-      alert("Erro: " + error.message);
-    } 
-    finally { setIsLoadingServices(false); }
-  };
-
-  // --- LÓGICA DE PROFISSIONAIS ---
-  
   // Efeito que carrega tudo
   useEffect(() => {
     if (!managedShopId) return;
     
-    fetchServices(); // Carrega os serviços
+    fetchShopProfile();
+    fetchServices();
     
     // Inicia o "ouvinte" da lista de profissionais
     setIsLoadingPros(true);
@@ -88,15 +122,73 @@ function AdminPanel() {
       setIsLoadingPros(false);
     });
     
-    return () => unsubscribe(); // Limpa o ouvinte
+    return () => unsubscribe();
     
-  }, [managedShopId, fetchServices]); // 'fetchServices' adicionado
+  }, [managedShopId, fetchShopProfile, fetchServices]);
 
-  // Função para CONVIDAR
+  // --- FUNÇÕES DE SALVAR / ATUALIZAR ---
+
+  // 1. Salva o Perfil da Loja
+  const handleUpdateShopProfile = async (e) => {
+    e.preventDefault();
+    setIsUploading(true);
+    let newLogoUrl = shopProfile.logoUrl;
+
+    try {
+      if (newLogoFile) {
+        console.log("Enviando nova logo...");
+        newLogoUrl = await uploadImageToCloudinary(newLogoFile);
+        setNewLogoFile(null);
+      }
+      
+      const shopDocRef = doc(db, "barbershops", managedShopId);
+      await updateDoc(shopDocRef, {
+        name: shopProfile.name,
+        address: shopProfile.address,
+        cidade: shopProfile.cidade,
+        description: shopProfile.description,
+        logoUrl: newLogoUrl
+      });
+      
+      alert("Perfil da loja atualizado com sucesso!");
+
+    } catch (error) {
+      console.error("Erro ao atualizar perfil: ", error);
+      alert("Erro ao atualizar: " + error.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // 2. Adicionar Serviço
+  const handleAddService = async (e) => {
+    e.preventDefault();
+    if (!serviceName || !servicePrice || !serviceDuration) return;
+    setIsLoadingServices(true);
+    try {
+      await addDoc(collection(db, "services"), {
+        name: serviceName,
+        price: Number(servicePrice),
+        duration: Number(serviceDuration),
+        barbershopId: managedShopId
+      });
+      alert("Serviço adicionado com sucesso!");
+      setServiceName(''); 
+      setServicePrice(''); 
+      setServiceDuration('');
+      fetchServices();
+    } catch (error) { 
+      console.error("Erro ao adicionar serviço: ", error); 
+      alert("Erro: " + error.message);
+    } finally { 
+      setIsLoadingServices(false); 
+    }
+  };
+  
+  // 3. Convidar Profissional
   const handleInviteProfessional = async (e) => {
     e.preventDefault();
     if (!inviteName || !inviteEmail) return alert("Preencha nome e email.");
-    
     setIsLoadingInvite(true);
     try {
       await addDoc(collection(db, "invites"), {
@@ -106,11 +198,9 @@ function AdminPanel() {
         status: "pending",
         createdAt: Timestamp.now()
       });
-      
       alert(`Convite enviado para ${inviteName}! Avise-o para se cadastrar com este email.`);
       setInviteName('');
       setInviteEmail('');
-      
     } catch (error) {
       console.error("Erro ao convidar: ", error);
       alert("Erro ao enviar convite.");
@@ -118,32 +208,159 @@ function AdminPanel() {
       setIsLoadingInvite(false);
     }
   };
-
-  // Função para REMOVER
+  
+  // 4. Remover Profissional
   const handleRemoveProfessional = async (profId, profName, userId) => {
     if (!window.confirm(`Tem certeza que quer remover "${profName}"? Isso também removerá a 'role' dele e o converterá em cliente.`)) return;
 
     try {
-      // (Isso é complexo, requer um 'batch' para deletar o 'prof' E atualizar a 'role')
-      // Por enquanto, vamos só deletar o perfil profissional
+      const batch = writeBatch(db);
+
       const profDocRef = doc(db, "professionals", profId);
-      await deleteDoc(profDocRef);
+      batch.delete(profDocRef);
       
-      // TODO: Usar uma Cloud Function para atualizar a 'role' do 'userId' para 'client'
-      // Deletar o 'profDocRef' (que tem o ID do doc) é mais seguro que o 'userId'
+      const roleDocRef = doc(db, "roles", userId);
+      batch.update(roleDocRef, {
+        role: "client",
+        worksAtShopId: deleteField()
+      });
+
+      await batch.commit();
       
-      alert(`${profName} foi removido.`);
-      // O 'onSnapshot' atualizará a lista automaticamente
+      alert(`${profName} foi removido e rebaixado para Cliente.`);
       
     } catch (error) {
       console.error("Erro ao remover: ", error);
+      alert("Erro ao remover profissional: " + error.message);
+    }
+  };
+
+ // 5. Salvar Chaves de Pagamento (ATUALIZADO)
+  const handleSavePaymentKeys = async () => {
+    if (!mpAccessToken) return alert("Por favor, cole o Access Token.");
+    setIsSavingKeys(true);
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Salva o token no COFRE PRIVADO (Segurança)
+      const keysDocRef = doc(db, "barbershops", managedShopId, "private", "keys");
+      batch.set(keysDocRef, { accessToken: mpAccessToken }, { merge: true });
+
+      // 2. Atualiza o sinalizador PÚBLICO na loja (Para o ClientPanel saber)
+      const shopDocRef = doc(db, "barbershops", managedShopId);
+      batch.update(shopDocRef, { onlinePaymentEnabled: true });
+      
+      await batch.commit();
+      
+      alert("Pagamento online ATIVADO para sua loja!");
+      setMpAccessToken("");
+    } catch (error) {
+      console.error("Erro ao salvar chaves:", error);
+      alert("Erro ao salvar chaves. Verifique se você é o dono da loja.");
+    } finally {
+      setIsSavingKeys(false);
     }
   };
   
   // --- RENDERIZAÇÃO (JSX) ---
+  
+  if (isLoadingProfile || !shopProfile) {
+    return <div><h2>Carregando seu painel...</h2></div>;
+  }
+  
   return (
     <div>
-      {/* Seção 1: Gerenciar Serviços */}
+      {/* --- Seção 1: Perfil da Loja --- */}
+      <div className={styles.panel}>
+        <h3 className={styles.sectionTitle}>Perfil da Loja</h3>
+        <form onSubmit={handleUpdateShopProfile} className={styles.form}>
+          
+          <label className={styles.formField} htmlFor="shopName">
+            <span>Nome da Barbearia:</span>
+            <input 
+              type="text" id="shopName" name="shopName"
+              value={shopProfile.name}
+              onChange={(e) => setShopProfile({...shopProfile, name: e.target.value})}
+              required
+            />
+          </label>
+          
+          <label className={styles.formField} htmlFor="shopAddress">
+            <span>Endereço:</span>
+            <input 
+              type="text" id="shopAddress" name="shopAddress"
+              value={shopProfile.address}
+              onChange={(e) => setShopProfile({...shopProfile, address: e.target.value})}
+              required
+            />
+          </label>
+          
+          <label className={styles.formField} htmlFor="shopCity">
+            <span>Cidade:</span>
+            <input 
+              type="text" id="shopCity" name="shopCity"
+              value={shopProfile.cidade}
+              onChange={(e) => setShopProfile({...shopProfile, cidade: e.target.value})}
+              required
+            />
+          </label>
+          
+          <label className={styles.formField} htmlFor="shopDescription">
+            <span>Descrição ("Sobre"):</span>
+            <textarea
+              id="shopDescription" name="shopDescription"
+              value={shopProfile.description}
+              onChange={(e) => setShopProfile({...shopProfile, description: e.target.value})}
+              rows="4"
+            />
+          </label>
+          
+          <label className={styles.formField} htmlFor="newShopLogo">
+            <span>Trocar Logo (opcional):</span>
+            <img 
+              src={shopProfile.logoUrl} 
+              alt="Logo atual" 
+              className={styles.logoPreview} 
+            />
+            <input 
+              type="file" 
+              id="newShopLogo" name="newShopLogo"
+              accept="image/png, image/jpeg"
+              onChange={(e) => setNewLogoFile(e.target.files[0])}
+            />
+          </label>
+          
+          <button type="submit" disabled={isUploading} className={styles.saveButton}>
+            {isUploading ? 'Salvando Perfil...' : 'Salvar Perfil da Loja'}
+          </button>
+        </form>
+      </div>
+
+      {/* --- Seção 2: Configuração de Pagamento --- */}
+      <div className={styles.panel}>
+        <h3 className={styles.sectionTitle}>Configuração de Pagamento</h3>
+        <p>Cole aqui seu <b>Access Token</b> do Mercado Pago para receber pagamentos.</p>
+        <div className={styles.form}>
+          <label className={styles.formField}>
+            <span>Access Token (Produção):</span>
+            <input 
+              type="password" 
+              value={mpAccessToken}
+              onChange={(e) => setMpAccessToken(e.target.value)}
+              placeholder="APP_USR-..."
+            />
+          </label>
+          <button 
+            onClick={handleSavePaymentKeys} 
+            disabled={isLoadingPayment}
+            className={styles.saveButton}
+          >
+            {isLoadingPayment ? 'Salvando...' : 'Salvar Credenciais'}
+          </button>
+        </div>
+      </div>
+
+      {/* --- Seção 3: Gerenciar Serviços --- */}
       <div className={styles.panel}>
         <h3 className={styles.sectionTitle}>Gerenciar Serviços</h3>
         <form onSubmit={handleAddService} className={styles.form}>
@@ -181,10 +398,9 @@ function AdminPanel() {
         )}
       </div>
 
-      {/* Seção 2: Gerenciar Profissionais */}
+      {/* --- Seção 4: Gerenciar Profissionais --- */}
       <div className={styles.panel}>
         <h3 className={styles.sectionTitle}>Gerenciar Profissionais</h3>
-        
         <form onSubmit={handleInviteProfessional} className={styles.inviteForm}>
           <h4>Convidar Novo Profissional</h4>
           <p>Insira o nome e email do profissional. Ele deverá se cadastrar no app usando este email para ser vinculado à sua loja.</p>
@@ -218,10 +434,10 @@ function AdminPanel() {
             {professionals.map(prof => (
               <div key={prof.id} className={styles.proCard}>
                 <p><strong>Nome:</strong> {prof.name}</p>
-                {/* O ID do documento é prof.id, o ID do usuário é prof.userId */}
                 <button 
                   className={styles.deleteButton}
                   onClick={() => handleRemoveProfessional(prof.id, prof.name, prof.userId)}
+                  disabled={isLoadingPros}
                 >
                   Remover
                 </button>
