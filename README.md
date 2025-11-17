@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Barber App - Plataforma de Agendamento Multi-loja (SaaS)
 
 Uma plataforma completa para barbearias, permitindo gestão de serviços, profissionais e agendamentos online com pagamentos integrados.
