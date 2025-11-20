@@ -1,19 +1,19 @@
 // src/components/AuthChat/AuthChat.jsx
-// (Atualizado com Lógica de Convite de Profissional)
+// (COMPLETO - Visual Premium + Tailwind + Lógica de Convite)
 
 import { useState, useEffect, useRef } from 'react';
-import './AuthChat.css'; // Importa o CSS da mesma pasta
 import { 
   createUserWithEmailAndPassword, 
   updateProfile, 
   signInWithEmailAndPassword 
 } from "firebase/auth";
-import { auth, db } from '../../firebase/firebase-config'; // Caminho corrigido
+import { auth, db } from '../../firebase/firebase-config';
 import { 
   doc, writeBatch, 
-  collection, query, where, getDocs, // Imports para a checagem de convite
-  updateDoc // Para atualizar o convite
+  collection, query, where, getDocs
 } from "firebase/firestore"; 
+import { toast } from 'sonner';
+import { ArrowLeft, Send, MessageSquare } from 'lucide-react';
 
 function AuthChat({ onBack }) {
   const [step, setStep] = useState('initial');
@@ -24,9 +24,9 @@ function AuthChat({ onBack }) {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
 
-  // Estado do histórico de mensagens (começa com a 1ª mensagem)
+  // Estado do histórico de mensagens
   const [messages, setMessages] = useState([
-    { id: 'initial-1', text: 'Olá! 👋 Bem-vindo(a). Você já tem uma conta?', sender: 'bot' }
+    { id: 'initial-1', text: 'Olá! 👋 Bem-vindo(a) ao Barber App. Como posso ajudar você hoje?', sender: 'bot' }
   ]);
   
   const messageListRef = useRef(null);
@@ -42,17 +42,17 @@ function AuthChat({ onBack }) {
   // Helper para auto-scroll
   useEffect(() => {
     if (messageListRef.current) {
-      const { scrollHeight } = messageListRef.current;
-      messageListRef.current.scrollTo(0, scrollHeight);
+      const { scrollHeight, clientHeight } = messageListRef.current;
+      messageListRef.current.scrollTo({ top: scrollHeight - clientHeight, behavior: 'smooth' });
     }
   }, [messages]);
 
-  // Lógica principal (o que acontece quando o usuário envia)
+  // Lógica principal (envio)
   const handleSend = async (e) => {
     e.preventDefault();
-    if (isLoading || !inputValue) return;
+    if (isLoading || !inputValue.trim()) return;
 
-    const userInput = inputValue;
+    const userInput = inputValue.trim();
     addMessage(userInput, "user"); 
     setInputValue(''); 
     setIsLoading(true);
@@ -62,25 +62,26 @@ function AuthChat({ onBack }) {
       if (step === 'login_email') {
         setEmail(userInput.toLowerCase());
         setStep('login_password'); 
-        addMessage("Entendido. Agora, digite sua senha:", "bot");
+        addMessage("Entendido. Agora, digite sua senha de acesso:", "bot");
       } 
       else if (step === 'login_password') {
         await signInWithEmailAndPassword(auth, email, userInput);
+        // O App.jsx detectará o login
       }
       
-      // === FLUXO DE CADASTRO (CLIENTE ou PROFISSIONAL) ===
+      // === FLUXO DE CADASTRO ===
       else if (step === 'signup_name') {
         setFullName(userInput); 
         setStep('signup_email'); 
-        addMessage(`Prazer, ${userInput}! Qual seu melhor email?`, "bot");
+        addMessage(`Prazer, ${userInput}! Qual é o seu melhor e-mail?`, "bot");
       }
       else if (step === 'signup_email') {
         setEmail(userInput.toLowerCase());
         setStep('signup_password');
-        addMessage("Perfeito. Agora, crie uma senha (mín. 6 caracteres):", "bot");
+        addMessage("Perfeito. Agora, crie uma senha segura (mínimo 6 caracteres):", "bot");
       }
       
-      // --- (A CORREÇÃO ESTÁ AQUI) ---
+      // === FINALIZAÇÃO DO CADASTRO (COM CHECAGEM DE CONVITE) ===
       else if (step === 'signup_password') {
         const newPassword = userInput;
         const userEmail = email; // Já está em minúsculas
@@ -94,26 +95,24 @@ function AuthChat({ onBack }) {
         const user = userCredential.user;
         await updateProfile(user, { displayName: fullName });
         
-        // Etapa 2: Checar o convite (COM CONSULTA SIMPLES)
+        // Etapa 2: Checar o convite
         const invitesQuery = query(
           collection(db, "invites"),
-          where("email", "==", userEmail) // 1. Busque SÓ pelo email
+          where("email", "==", userEmail)
         );
         
         const inviteSnapshot = await getDocs(invitesQuery);
         
-        // 2. Filtre o "status" AQUI, no JavaScript
+        // Filtra status no JS
         const pendingInvite = inviteSnapshot.docs.find(
           doc => doc.data().status === "pending"
         );
         
         const batch = writeBatch(db);
         
-        // 3. Use a variável filtrada
         if (!pendingInvite) {
-          // --- É UM CLIENTE NORMAL ---
-          console.log("Nenhum convite pendente encontrado. Cadastrando como Cliente.");
-          
+          // --- CLIENTE NORMAL ---
+          console.log("Cadastrando como Cliente.");
           const userDocRef = doc(db, "users", user.uid);
           batch.set(userDocRef, { uid: user.uid, displayName: fullName, email: userEmail, createdAt: new Date() });
           
@@ -121,8 +120,8 @@ function AuthChat({ onBack }) {
           batch.set(roleDocRef, { role: "client" });
           
         } else {
-          // --- É UM PROFISSIONAL CONVIDADO ---
-          console.log("Convite pendente encontrado! Cadastrando como Profissional.");
+          // --- PROFISSIONAL CONVIDADO ---
+          console.log("Convite encontrado! Cadastrando como Profissional.");
           const inviteDoc = pendingInvite;
           const inviteData = inviteDoc.data();
           
@@ -152,30 +151,26 @@ function AuthChat({ onBack }) {
         
         // Etapa 3: Salvar tudo
         await batch.commit();
-        // O vigia no App.jsx vai pegar o login e redirecionar
+        toast.success("Conta criada com sucesso!");
       }
-      // --- FIM DA CORREÇÃO ---
 
     } catch (error) {
       console.error("Erro na autenticação:", error.code, error.message);
       
-      // Lógica "Inteligente" de Erro (sem mudança)
       if (error.code === 'auth/email-already-in-use') {
-        addMessage("Este e-mail já está cadastrado! Vamos tentar o login. Por favor, digite sua senha:", "bot");
+        addMessage("Este e-mail já possui cadastro. Vamos tentar o login? Digite sua senha:", "bot");
         setStep('login_password');
       } 
-      else if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
-        addMessage("O e-mail ou a senha estão incorretos. Por favor, tente novamente:", "bot");
-        if (step === 'login_password') { /* fica no mesmo passo */ } 
-        else {
-          setStep('login_email'); 
-          addMessage("Qual o seu email?", "bot");
-        }
+      else if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found') {
+        addMessage("Credenciais incorretas. Por favor, tente novamente:", "bot");
+        // Mantém no mesmo passo para tentar de novo
       } 
+      else if (error.message.includes("6 caracteres")) {
+         addMessage("Senha muito curta. Tente uma com 6 ou mais caracteres:", "bot");
+      }
       else {
-        // O 'permission-denied' que você estava vendo caía aqui
-        addMessage(`Ops, algo deu errado (${error.code}). Vamos tentar do início.`, "bot");
-        addMessage("Você já tem uma conta?", "bot");
+        toast.error(`Erro: ${error.code}`);
+        addMessage("Ocorreu um erro inesperado. Vamos recomeçar?", "bot");
         setStep('initial');
       }
     }
@@ -187,80 +182,120 @@ function AuthChat({ onBack }) {
   const handleInitialChoice = (choice) => {
     if (choice === 'login') {
       setStep('login_email');
-      addMessage("Sim, quero Entrar", "user");
-      addMessage("Ok, qual o seu email?", "bot");
-    } else { // 'signup'
+      addMessage("Já tenho conta", "user");
+      setTimeout(() => addMessage("Ok, qual é o seu e-mail?", "bot"), 400);
+    } else { 
       setStep('signup_name');
-      addMessage("Não, quero me Cadastrar", "user");
-      addMessage("Legal! Qual o seu nome completo?", "bot");
+      addMessage("Quero me cadastrar", "user");
+      setTimeout(() => addMessage("Excelente! Para começar, qual seu nome completo?", "bot"), 400);
     }
   };
 
-  // ---- RENDERIZAÇÃO (JSX) ----
   return (
-    <div className="chat-container">
-      {/* Botão Voltar */}
-      <button 
-        onClick={onBack} 
-        style={{ 
-          margin: '5px', background: 'none', border: 'none', 
-          cursor: 'pointer', color: '#007bff', fontSize: '14px',
-          alignSelf: 'flex-start'
-        }}
-      >
-        &larr; Voltar
-      </button>
-
-      {/* Lista de Mensagens */}
-      <div className="message-list" ref={messageListRef}>
-        {messages.map((msg) => (
-          <div key={msg.id} className={`message ${msg.sender}`}>
-            {msg.text}
+    <div className="flex items-center justify-center min-h-[500px] p-4 animate-fade-in">
+      
+      <div className="w-full max-w-md bg-grafite-card border border-grafite-border rounded-2xl shadow-premium overflow-hidden flex flex-col h-[600px]">
+        
+        {/* Header */}
+        <div className="bg-grafite-main border-b border-grafite-border p-4 flex items-center gap-3">
+          <button 
+            onClick={onBack} 
+            className="text-text-secondary hover:text-gold-main transition-colors p-1 rounded-full hover:bg-grafite-surface"
+          >
+            <ArrowLeft size={20} />
+          </button>
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-gold-main flex items-center justify-center text-grafite-main">
+              <MessageSquare size={18} />
+            </div>
+            <div>
+              <h3 className="font-heading font-semibold text-sm text-white">Assistente Virtual</h3>
+              <span className="text-xs text-green-400 flex items-center gap-1">
+                <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span> Online
+              </span>
+            </div>
           </div>
-        ))}
-        {isLoading && <div className="message bot">...</div>}
-      </div>
-
-      {/* Input (se não for o passo inicial) */}
-      {step !== 'initial' && (
-        <form className="input-form" onSubmit={handleSend}>
-          <input 
-            type={step.includes('password') ? 'password' : 
-                  step.includes('email') ? 'email' : 'text'}
-            name={
-              step.includes('email') ? 'email' :
-              step.includes('password') ? 'password' :
-              step.includes('name') ? 'full-name' : 'text'
-            }
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            placeholder={
-              step === 'login_email' ? 'Digite seu email...' :
-              step === 'login_password' ? 'Digite sua senha...' :
-              step === 'signup_name' ? 'Digite seu nome completo...' :
-              step === 'signup_email' ? 'Digite seu email...' :
-              'Crie sua senha...'
-            }
-            disabled={isLoading}
-            autoComplete="on"
-          />
-          <button type="submit" disabled={isLoading}>
-            {'>'}
-          </button>
-        </form>
-      )}
-
-      {/* Botões Iniciais */}
-      {step === 'initial' && (
-        <div className="initial-buttons">
-          <button onClick={() => handleInitialChoice('login')}>
-            Sim, quero Entrar
-          </button>
-          <button onClick={() => handleInitialChoice('signup')}>
-            Não, quero me Cadastrar
-          </button>
         </div>
-      )}
+
+        {/* Chat Area */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-grafite-surface/50" ref={messageListRef}>
+          {messages.map((msg) => (
+            <div 
+              key={msg.id} 
+              className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
+              <div 
+                className={`
+                  max-w-[85%] p-4 rounded-2xl text-sm leading-relaxed shadow-sm animate-slide-up
+                  ${msg.sender === 'user' 
+                    ? 'bg-gold-main text-grafite-main font-medium rounded-tr-none' 
+                    : 'bg-grafite-main border border-grafite-border text-text-secondary rounded-tl-none'
+                  }
+                `}
+              >
+                {msg.text}
+              </div>
+            </div>
+          ))}
+          
+          {isLoading && (
+            <div className="flex justify-start">
+              <div className="bg-grafite-main border border-grafite-border px-4 py-3 rounded-2xl rounded-tl-none flex gap-1 items-center">
+                <span className="w-2 h-2 bg-text-secondary rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                <span className="w-2 h-2 bg-text-secondary rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                <span className="w-2 h-2 bg-text-secondary rounded-full animate-bounce"></span>
+              </div>
+            </div>
+          )}
+
+          {/* Botões de Escolha Inicial (Inline no Chat) */}
+          {step === 'initial' && !isLoading && (
+            <div className="flex flex-col gap-2 mt-4 animate-fade-in">
+              <button 
+                onClick={() => handleInitialChoice('login')}
+                className="w-full py-3 px-4 bg-grafite-main border border-gold-main/30 text-text-primary rounded-xl hover:bg-gold-dim/10 hover:border-gold-main transition-all text-sm font-medium text-left flex justify-between items-center group"
+              >
+                Sim, já tenho uma conta
+                <span className="text-gold-main opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+              </button>
+              <button 
+                onClick={() => handleInitialChoice('signup')}
+                className="w-full py-3 px-4 bg-gold-main text-grafite-main rounded-xl hover:bg-gold-hover hover:shadow-glow transition-all text-sm font-bold text-left flex justify-between items-center"
+              >
+                Não, quero me cadastrar
+                <span>→</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Input Area */}
+        {step !== 'initial' && (
+          <form onSubmit={handleSend} className="p-4 bg-grafite-main border-t border-grafite-border flex gap-3 items-center">
+            <input 
+              type={step.includes('password') ? 'password' : step.includes('email') ? 'email' : 'text'}
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              placeholder={
+                step.includes('password') ? 'Digite sua senha...' : 
+                step.includes('email') ? 'Digite seu e-mail...' : 
+                'Digite sua resposta...'
+              }
+              className="flex-1 bg-grafite-surface border border-grafite-border rounded-full px-5 py-3 text-sm text-text-primary placeholder-text-secondary/50 outline-none focus:border-gold-main focus:ring-1 focus:ring-gold-main/50 transition-all"
+              disabled={isLoading}
+              autoComplete="off"
+              autoFocus
+            />
+            <button 
+              type="submit" 
+              disabled={isLoading || !inputValue.trim()}
+              className="bg-gold-main text-grafite-main rounded-full w-12 h-12 flex items-center justify-center hover:bg-gold-hover hover:shadow-glow transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Send size={20} className="ml-1" />
+            </button>
+          </form>
+        )}
+      </div>
     </div>
   );
 }

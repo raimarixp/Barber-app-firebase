@@ -1,34 +1,27 @@
 // src/components/ClientPanel/ClientPanel.jsx
-// (COMPLETO - Com Catálogo, Agendamento e "Meus Agendamentos" [Apenas Leitura])
-import { functions } from '../../firebase/firebase-config';
+// (COMPLETO - Visual Premium + Lógica de Pagamento Híbrida)
+
+import { useState, useEffect, useCallback } from 'react';
+import { functions, db, auth } from '../../firebase/firebase-config';
 import { httpsCallable } from 'firebase/functions';
-import { useState, useEffect } from 'react';
-import { db, auth } from '../../firebase/firebase-config';
 import { 
-  collection, 
-  getDocs, 
-  query, 
-  where,
-  doc,
-  getDoc,
-  addDoc,
-  Timestamp,
-  onSnapshot
+  collection, getDocs, query, where, doc, getDoc, 
+  addDoc, Timestamp, onSnapshot 
 } from "firebase/firestore"; 
-
-// Importe o Calendário e os arquivos CSS
 import Calendar from 'react-calendar';
-import './Calendar.css';
-import styles from './ClientPanel.module.css';
-
-// Importe o Contexto
+import './Calendar.css'; // Mantemos para a estrutura base, mas estilizaremos via container
 import { useShop } from '../../App.jsx';
+import { toast } from 'sonner';
+import { 
+  MapPin, Calendar as CalIcon, Clock, Scissors, 
+  User, CheckCircle, CreditCard, Store, Search, ArrowLeft 
+} from 'lucide-react';
 
 const daysOfWeek = [
   'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'
 ];
 
-// Helper functions movidas para fora do componente
+// --- Helper Functions ---
 const timeToMinutes = (time) => {
   if (!time) return 0;
   const [hours, minutes] = time.split(':').map(Number);
@@ -68,7 +61,6 @@ const generateTimeSlots = (start, end, duration, bookedSlots, blockedPeriods) =>
   return slots;
 };
 
-
 function ClientPanel() {
   const { viewingShopId, setViewingShopId } = useShop();
 
@@ -80,7 +72,7 @@ function ClientPanel() {
 
   // --- Estados do Fluxo de Agendamento ---
   const [services, setServices] = useState([]);
-  const [isLoadingServices, setIsLoadingServices] = useState(true);
+  const [isLoadingServices, setIsLoadingServices] = useState(false); // Inicializa false até selecionar loja
   const [selectedService, setSelectedService] = useState(null); 
   const [availableProfessionals, setAvailableProfessionals] = useState([]);
   const [isLoadingProfessionals, setIsLoadingProfessionals] = useState(false);
@@ -88,6 +80,11 @@ function ClientPanel() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [availableSlots, setAvailableSlots] = useState([]);
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
+  const [selectedSlot, setSelectedSlot] = useState(null);
+
+  // --- Estados de Modal e Pagamento ---
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [currentShopData, setCurrentShopData] = useState(null);
 
   // --- Estado para "Meus Agendamentos" ---
   const [myAppointments, setMyAppointments] = useState([]);
@@ -105,12 +102,10 @@ function ClientPanel() {
     setIsLoadingAppointments(true);
     const today = Timestamp.fromDate(new Date(new Date().setHours(0,0,0,0)));
 
-    // Esta consulta precisa do Índice Composto que você criou
     const appointmentsQuery = query(
       collection(db, "appointments"),
       where("clientId", "==", auth.currentUser.uid),
       where("startTime", ">=", today),
-      // Mostra 'confirmado' E 'check-in' (se o cliente fez check-in e recarregou)
       where("status", "in", ["confirmed", "checked_in"]) 
     );
 
@@ -127,7 +122,7 @@ function ClientPanel() {
     });
 
     return () => unsubscribe();
-  }, []); // '[]' = Rode uma vez
+  }, []);
 
   // 2. Busca Lojas por Cidade
   const handleSearchCity = async (e) => {
@@ -151,17 +146,31 @@ function ClientPanel() {
       const shopsList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setBarbershops(shopsList);
       setSearchedCity(searchCity);
+      if(shopsList.length === 0) toast.info("Nenhuma barbearia encontrada nesta cidade.");
     } catch (error) { 
       console.error("Erro ao buscar barbearias: ", error); 
-      alert("Erro ao buscar lojas. (O índice do Firestore pode estar sendo criado, tente em 1 min)");
+      toast.error("Erro ao buscar lojas. Verifique sua conexão.");
     } finally {
       setIsLoadingShops(false);
     }
   };
 
-  // 3. Busca Serviços (Roda quando 'viewingShopId' é definido)
+  // 3. Carregar dados da loja selecionada (para verificar configs de pagamento)
   useEffect(() => {
-    if (viewingShopId) { 
+    if (viewingShopId) {
+      const fetchShopData = async () => {
+         try {
+           const shopDoc = await getDoc(doc(db, "barbershops", viewingShopId));
+           if (shopDoc.exists()) {
+             setCurrentShopData(shopDoc.data());
+           }
+         } catch (error) {
+           console.error("Erro ao carregar dados da loja", error);
+         }
+      };
+      fetchShopData();
+
+      // Carregar Serviços
       const fetchServices = async () => {
         setIsLoadingServices(true);
         try {
@@ -172,14 +181,17 @@ function ClientPanel() {
           const querySnapshot = await getDocs(servicesQuery);
           const servicesList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           setServices(servicesList);
-        } catch (error) { console.error("Erro ao buscar serviços: ", error); } 
+        } catch (error) { 
+            console.error("Erro ao buscar serviços: ", error);
+            toast.error("Erro ao carregar serviços.");
+        } 
         finally { setIsLoadingServices(false); }
       };
       fetchServices();
     }
   }, [viewingShopId]);
 
-  // 4. Busca Profissionais (Roda ao selecionar serviço)
+  // 4. Busca Profissionais
   const handleSelectService = async (service) => {
     setSelectedService(service);
     setIsLoadingProfessionals(true);
@@ -198,12 +210,12 @@ function ClientPanel() {
       setAvailableProfessionals(professionalsList);
     } catch (error) { 
       console.error("Erro ao buscar profissionais: ", error); 
-      alert("Erro ao buscar profissionais. Verifique o console (F12) para um link de criação de índice.");
+      toast.error("Erro ao carregar profissionais.");
     } 
     finally { setIsLoadingProfessionals(false); }
   };
 
-  // 5. Busca Slots (O "Motor")
+  // 5. Busca Slots (Motor de Agendamento)
   useEffect(() => {
     if (!selectedProfessional || !selectedDate || !selectedService) return;
     
@@ -213,18 +225,17 @@ function ClientPanel() {
       const dayKey = daysOfWeek[selectedDate.getDay()];
       
       try {
-        // A. Busque o Horário de Trabalho
+        // A. Horário de Trabalho
         const workHoursRef = doc(db, "professionals", selectedProfessional.id, "workingHours", dayKey);
         const workHoursSnap = await getDoc(workHoursRef);
         if (!workHoursSnap.exists() || !workHoursSnap.data().isWorking) {
-          console.log("Profissional não trabalha neste dia.");
           setIsLoadingSlots(false); 
           return;
         }
         const { startTime, endTime } = workHoursSnap.data();
         const duration = selectedService.duration;
         
-        // B. Busque os Agendamentos JÁ FEITOS
+        // B. Agendamentos Existentes
         const startOfDay = new Date(selectedDate); 
         startOfDay.setHours(0, 0, 0, 0);
         const endOfDay = new Date(selectedDate); 
@@ -237,11 +248,12 @@ function ClientPanel() {
           where("startTime", "<=", Timestamp.fromDate(endOfDay))
         );
         const appointmentsSnapshot = await getDocs(appointmentsQuery);
-        const bookedSlots = appointmentsSnapshot.docs.map(doc => 
-          doc.data().startTime.toDate().toTimeString().substring(0, 5)
-        );
+        // Consideramos agendamentos que não foram cancelados/rejeitados
+        const bookedSlots = appointmentsSnapshot.docs
+            .filter(d => !['cancelled_by_client', 'cancelled_by_pro'].includes(d.data().status))
+            .map(doc => doc.data().startTime.toDate().toTimeString().substring(0, 5));
         
-        // C. Busque os BLOQUEIOS
+        // C. Bloqueios
         const blockedPeriods = [];
         const blocksCollectionRef = collection(db, "professionals", selectedProfessional.id, "blockedTimes");
         
@@ -253,13 +265,13 @@ function ClientPanel() {
         const singleSnapshot = await getDocs(singleQuery);
         singleSnapshot.forEach(doc => blockedPeriods.push(doc.data()));
         
-        // D. Calcule os slots livres
+        // D. Cálculo
         const freeSlots = generateTimeSlots(startTime, endTime, duration, bookedSlots, blockedPeriods);
         setAvailableSlots(freeSlots);
         
       } catch (error) {
         console.error("Erro ao buscar slots: ", error);
-        alert("Erro ao calcular horários. Verifique o console (F12) por erros de índice.");
+        toast.error("Erro ao calcular horários.");
       } finally {
         setIsLoadingSlots(false);
       }
@@ -268,29 +280,46 @@ function ClientPanel() {
     fetchAvailableSlots();
   }, [selectedDate, selectedProfessional, selectedService]); 
   
+  // --- LÓGICA DE AGENDAMENTO & PAGAMENTO ---
 
-  // 6. Confirmar Agendamento (LÓGICA HÍBRIDA)
-  const handleConfirmBooking = async (slot) => {
-    if (!window.confirm(`Confirmar agendamento de ${selectedService.name} com ${selectedProfessional.name} às ${slot}?`)) return;
+  // Função inicial ao clicar no horário
+  const handleSlotClick = (slot) => {
+    setSelectedSlot(slot);
     
-    // Feedback visual
-    // (Idealmente use um estado separado para loading do botão, mas aqui usamos o de slots)
-    
+    // 1. Se a loja NÃO tem pagamento online habilitado -> Pagar na Loja direto
+    if (!currentShopData?.onlinePaymentEnabled) {
+       if (window.confirm(`Confirmar agendamento para ${slot}?`)) {
+          processBooking('in_store');
+       }
+       return;
+    }
+
+    // 2. Se a loja TEM pagamento online
+    // Verifica se é OBRIGATÓRIO (requirePayment)
+    if (currentShopData?.requirePayment) {
+       // Redireciona direto para pagamento online
+       if (window.confirm(`Ir para pagamento do agendamento das ${slot}?`)) {
+          processBooking('online');
+       }
+    } else {
+       // NÃO é obrigatório -> Abre Modal de Escolha
+       setShowPaymentModal(true);
+    }
+  };
+
+  // Processa o agendamento baseado no método escolhido
+  const processBooking = async (method) => {
+    const slot = selectedSlot;
+    if (!slot) return;
+
     try {
       const [hour, minute] = slot.split(':').map(Number);
       const startTimeObj = new Date(selectedDate);
       startTimeObj.setHours(hour, minute, 0, 0);
       const endTimeObj = new Date(startTimeObj.getTime() + selectedService.duration * 60000);
-      
-      // 1. VERIFICAR SE A LOJA ACEITA PAGAMENTO ONLINE
-      // Precisamos buscar o documento da loja (barbershop) para ver o 'onlinePaymentEnabled'
-      // Como já buscamos as lojas no início (state 'barbershops'), podemos procurar lá.
-      const currentShop = barbershops.find(s => s.id === viewingShopId);
-      
-      // Se a loja NÃO tem pagamento ativado, agende direto (Pagar na Loja)
-      if (!currentShop?.onlinePaymentEnabled) {
-        console.log("Loja sem pagamento online. Agendando direto...");
-        
+
+      // A) PAGAR NA LOJA
+      if (method === 'in_store') {
         await addDoc(collection(db, "appointments"), {
           clientId: auth.currentUser.uid,
           professionalId: selectedProfessional.id,
@@ -299,60 +328,67 @@ function ClientPanel() {
           startTime: Timestamp.fromDate(startTimeObj),
           endTime: Timestamp.fromDate(endTimeObj),
           status: "confirmed",
-          paymentMethod: "in_store" // Marcamos que será pago na loja
+          paymentMethod: "in_store",
+          createdAt: Timestamp.now()
         });
         
-        alert("Agendamento confirmado! (Pagamento no local)");
+        toast.success("Agendamento confirmado!");
+        setShowPaymentModal(false);
         resetSelection();
-        return; // FIM DO FLUXO
       }
-
-      // 2. SE TEM PAGAMENTO ONLINE, CHAME A CLOUD FUNCTION
-      console.log("Loja com pagamento online. Iniciando checkout...");
       
-      const payload = {
-        title: `${selectedService.name} - ${selectedProfessional.name}`,
-        price: selectedService.price,
-        appointmentData: {
-          clientId: auth.currentUser.uid,
-          professionalId: selectedProfessional.id,
-          serviceId: selectedService.id,
-          barbershopId: viewingShopId,
-          startTime: startTimeObj.toISOString(), 
-          endTime: endTimeObj.toISOString(),
-          slotTime: slot 
+      // B) PAGAR ONLINE (Mercado Pago)
+      else if (method === 'online') {
+        toast.loading("Gerando pagamento...");
+        
+        const payload = {
+          title: `${selectedService.name} - ${selectedProfessional.name}`,
+          price: selectedService.price,
+          appointmentData: {
+            clientId: auth.currentUser.uid,
+            professionalId: selectedProfessional.id,
+            serviceId: selectedService.id,
+            barbershopId: viewingShopId,
+            startTime: startTimeObj.toISOString(), 
+            endTime: endTimeObj.toISOString(),
+            slotTime: slot 
+          }
+        };
+
+        const createPaymentFn = httpsCallable(functions, 'createPayment');
+        const response = await createPaymentFn(payload);
+        const { paymentUrl } = response.data;
+
+        if (paymentUrl) {
+          window.location.href = paymentUrl;
+        } else {
+          toast.dismiss();
+          toast.error("Erro ao gerar link de pagamento.");
         }
-      };
-
-      const createPaymentFn = httpsCallable(functions, 'createPayment');
-      const response = await createPaymentFn(payload);
-      const { paymentUrl } = response.data;
-
-      if (paymentUrl) {
-        window.location.href = paymentUrl;
-      } else {
-        alert("Erro ao gerar pagamento. Tente novamente.");
       }
 
     } catch (error) {
       console.error("Erro no agendamento: ", error);
-      alert("Ocorreu um erro: " + error.message);
+      toast.error("Erro ao processar agendamento: " + error.message);
     }
   };
 
-  // --- Funções de Navegação "Voltar" ---
+  // --- Navegação ---
   const resetSelection = () => {
     setSelectedService(null);
     setAvailableProfessionals([]);
     setSelectedProfessional(null);
     setSelectedDate(new Date());
     setAvailableSlots([]);
+    setSelectedSlot(null);
+    setShowPaymentModal(false);
   };
   
   const backToProfessionals = () => {
     setSelectedProfessional(null);
     setSelectedDate(new Date());
     setAvailableSlots([]);
+    setSelectedSlot(null);
   };
   
   const handleBackToCatalog = () => {
@@ -362,80 +398,94 @@ function ClientPanel() {
     setSearchCity('');
   };
   
-  const handleSelectProfessional = (prof) => setSelectedProfessional(prof);
-  const handleSelectDate = (date) => setSelectedDate(date);
+  // --- JSX ---
 
-  
-  // --- RENDERIZAÇÃO (JSX) ---
-
-  // ETAPA 0: Mostrar Barra de Busca E "Meus Agendamentos"
+  // ETAPA 0: Dashboard Inicial
   if (!viewingShopId) {
     return (
-      <div className={styles.panel}>
+      <div className="max-w-4xl mx-auto p-4 space-y-8 animate-fade-in">
         
-        {/* Seção "Meus Agendamentos" (Simplificada) */}
+        {/* Meus Agendamentos */}
         {!isLoadingAppointments && myAppointments.length > 0 && (
-          <div className={styles.appointmentsList}>
-            <h2 className={styles.title}>Meus Próximos Agendamentos</h2>
-            {myAppointments.map(app => (
-              <div key={app.id} className={styles.appointmentCard}>
-                <h4>Agendamento Confirmado</h4>
-                <p>
-                  <strong>Data:</strong> {app.startTime.toDate().toLocaleDateString('pt-BR')}
-                  {' às '}
-                  {app.startTime.toDate().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}
-                </p>
-                <p style={{color: '#007bff', fontWeight: 'bold'}}>
-                  Status: {app.status === 'checked_in' ? 'Check-in Realizado' : 'Confirmado'}
-                </p>
-              </div>
-            ))}
-          </div>
+          <section className="card-premium">
+             <div className="flex items-center gap-2 border-b border-grafite-border pb-4 mb-4">
+                <CalIcon className="text-gold-main" size={24}/>
+                <h2 className="text-xl font-heading font-bold text-text-primary">Meus Agendamentos</h2>
+             </div>
+             <div className="grid gap-4 sm:grid-cols-2">
+              {myAppointments.map(app => (
+                <div key={app.id} className="bg-grafite-main border border-grafite-border p-4 rounded-lg flex flex-col gap-2 hover:border-gold-main/30 transition-colors">
+                  <div className="flex justify-between items-start">
+                    <span className="text-lg font-bold text-text-primary">
+                      {app.startTime.toDate().toLocaleDateString('pt-BR')}
+                    </span>
+                    <span className={`text-xs px-2 py-1 rounded-full font-bold border ${app.status === 'checked_in' ? 'bg-green-900/20 border-green-500 text-green-400' : 'bg-blue-900/20 border-blue-500 text-blue-400'}`}>
+                       {app.status === 'checked_in' ? 'Check-in' : 'Confirmado'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-gold-main">
+                     <Clock size={16}/>
+                     <span className="font-mono text-lg">
+                       {app.startTime.toDate().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}
+                     </span>
+                  </div>
+                </div>
+              ))}
+             </div>
+          </section>
         )}
         
-        {/* Seção "Encontre uma Barbearia" */}
-        <div style={{marginTop: '20px'}}>
-          <h2 className={styles.title}>Encontre uma Barbearia</h2>
-          <form onSubmit={handleSearchCity} className={styles.searchForm}> 
-            <label className={styles.formField} htmlFor="searchCity">
-              <span>Digite sua cidade:</span>
-              <input 
-                type="text" 
-                id="searchCity" 
-                name="searchCity"
-                value={searchCity}
-                onChange={(e) => setSearchCity(e.target.value)}
-                placeholder="Ex: São Paulo"
-              />
-            </label>
-            <button type="submit" className={styles.saveButton}>
-              {isLoadingShops ? 'Buscando...' : 'Buscar'}
+        {/* Busca de Barbearias */}
+        <section className="card-premium">
+          <div className="text-center mb-8">
+            <h2 className="text-3xl font-heading font-bold text-gold-main mb-2">Encontre sua Barbearia</h2>
+            <p className="text-text-secondary">Busque pelos melhores profissionais da sua cidade.</p>
+          </div>
+          
+          <form onSubmit={handleSearchCity} className="relative max-w-lg mx-auto mb-8"> 
+            <input 
+              type="text" 
+              value={searchCity}
+              onChange={(e) => setSearchCity(e.target.value)}
+              placeholder="Digite sua cidade (ex: São Paulo)"
+              className="input-premium pr-12 h-12"
+            />
+            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gold-main hover:text-white transition-colors">
+              {isLoadingShops ? <div className="animate-spin h-5 w-5 border-2 border-current border-t-transparent rounded-full"/> : <Search size={24}/>}
             </button>
           </form>
           
-          {/* Lista de Resultados */}
+          {/* Resultados */}
           {searchedCity && (
-            <div style={{marginTop: '20px'}}>
-              <h3 className={styles.title}>Resultados para "{searchedCity}"</h3>
-              {isLoadingShops ? <p>Carregando...</p> : (
+            <div className="animate-slide-up">
+              <h3 className="text-lg font-semibold text-text-secondary mb-4">Resultados para "{searchedCity}"</h3>
+              {isLoadingShops ? (
+                 <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gold-main"></div></div>
+              ) : (
                 barbershops.length === 0 ? (
-                  <p>Nenhuma barbearia encontrada nesta cidade.</p>
+                  <p className="text-center text-text-secondary italic py-8 bg-grafite-main rounded-lg border border-grafite-border border-dashed">
+                    Nenhuma barbearia encontrada.
+                  </p>
                 ) : (
-                  <div className={styles.shopCatalog}>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {barbershops.map(shop => (
-                      <div key={shop.id} className={styles.shopCard}>
-                        <img 
-                          src={shop.logoUrl} 
-                          alt={`Logo da ${shop.name}`} 
-                          style={{width: '100%', height: '150px', objectFit: 'cover', borderRadius: '4px'}} 
-                        />
-                        <h4 style={{marginTop: '10px'}}>{shop.name}</h4>
-                        <p>{shop.cidade}</p>
-                        <p style={{fontStyle: 'italic', color: '#666'}}>{shop.description.substring(0, 100)}...</p>
-                        <p>{shop.address}</p>
-                        <button onClick={() => setViewingShopId(shop.id)} className={styles.actionButton}>
-                          Ver Serviços
-                        </button>
+                      <div key={shop.id} className="bg-grafite-main border border-grafite-border rounded-xl overflow-hidden hover:shadow-glow transition-all duration-300 group">
+                        <div className="h-40 overflow-hidden">
+                           <img 
+                             src={shop.logoUrl} 
+                             alt={shop.name} 
+                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
+                           />
+                        </div>
+                        <div className="p-5">
+                          <h4 className="text-xl font-bold text-text-primary mb-1">{shop.name}</h4>
+                          <p className="text-sm text-text-secondary mb-2 flex items-center gap-1"><MapPin size={14}/> {shop.cidade}</p>
+                          <p className="text-sm text-text-secondary/70 line-clamp-2 mb-4 min-h-[40px]">{shop.description}</p>
+                          <p className="text-xs text-text-secondary mb-4 truncate">{shop.address}</p>
+                          <button onClick={() => setViewingShopId(shop.id)} className="btn-primary w-full py-2 text-sm">
+                            Ver Serviços
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -443,99 +493,214 @@ function ClientPanel() {
               )}
             </div>
           )}
-        </div>
+        </section>
       </div>
     );
   }
 
-  // --- Se uma loja FOI selecionada, mostre o fluxo de agendamento ---
-  
-  // ETAPA 1: Mostrar Lista de Serviços (da loja selecionada)
+  // ETAPA 1: Serviços
   if (viewingShopId && !selectedService) {
     return (
-      <div className={styles.panel}>
-        <button onClick={handleBackToCatalog} className={styles.backButton}>&larr; Voltar ao Catálogo</button>
-        <h2 className={styles.title}>Nossos Serviços</h2>
-        {isLoadingServices ? <p>Carregando serviços...</p> : (
-          services.length > 0 ? (
-            <div className={styles.serviceList}>
-              {services.map(service => (
-                <div key={service.id} className={styles.serviceCard}>
-                  <h4>{service.name}</h4>
-                  <p>Preço: R$ {service.price.toFixed(2)}</p>
-                  <p>Duração: {service.duration} minutos</p>
-                  <button onClick={() => handleSelectService(service)} className={styles.actionButton}>
-                    Agendar
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p>Nenhum serviço cadastrado para esta barbearia.</p>
-          )
-        )}
-      </div>
-    );
-  }
-
-  // ETAPA 2: Mostrar Profissionais
-  if (selectedService && !selectedProfessional) {
-    return (
-      <div className={styles.panel}>
-        <button onClick={resetSelection} className={styles.backButton}>&larr; Voltar aos Serviços</button>
-        <h2 className={styles.title}>Escolha um Profissional para: {selectedService.name}</h2>
-        {isLoadingProfessionals ? <p>Buscando profissionais...</p> : (
-          availableProfessionals.length > 0 ? (
-            <div className={styles.professionalList}>
-              {availableProfessionals.map(prof => (
-                <div key={prof.id} className={styles.professionalCard}>
-                  <h4>{prof.name}</h4>
-                  <button onClick={() => handleSelectProfessional(prof)} className={styles.actionButton}>
-                    Escolher {prof.name}
-                  </button> 
-                </div>
-              ))}
-            </div>
-          ) : (
-            !isLoadingProfessionals && <p>Nenhum profissional oferece este serviço no momento.</p>
-          )
-        )}
-      </div>
-    );
-  }
-
-  // ETAPA 3: Mostrar Calendário E Slots
-  if (selectedService && selectedProfessional) {
-    return (
-      <div className={styles.panel}>
-        <button onClick={backToProfessionals} className={styles.backButton}>&larr; Voltar aos Profissionais</button>
-        <h2 className={styles.title}>Escolha um dia para: {selectedService.name}</h2>
-        <p>Com: {selectedProfessional.name}</p>
+      <div className="max-w-5xl mx-auto p-4 animate-fade-in">
+        <button onClick={handleBackToCatalog} className="mb-6 flex items-center text-gold-main hover:underline gap-2 text-sm">
+          <ArrowLeft size={16}/> Voltar ao Catálogo
+        </button>
         
-        <div className={styles.calendarContainer}>
-          <Calendar 
-            onChange={handleSelectDate} 
-            value={selectedDate}
-            minDate={new Date()}
-            className="react-calendar" // Usa o CSS do 'Calendar.css'
-          />
-          <div className={styles.slotsContainer}>
-            <h4>Horários Livres para {selectedDate.toLocaleDateString('pt-BR')}</h4>
-            {isLoadingSlots && <p>Calculando...</p>}
-            {availableSlots.length > 0 && !isLoadingSlots && (
-              <div className={styles.slotsGrid}>
-                {availableSlots.map(slot => (
-                  <button key={slot} onClick={() => handleConfirmBooking(slot)} className={styles.slotButton}>
-                    {slot}
-                  </button>
+        <section className="card-premium">
+          <div className="border-b border-grafite-border pb-4 mb-6">
+             <h2 className="text-2xl font-heading font-bold text-gold-main">Selecione um Serviço</h2>
+             <p className="text-text-secondary text-sm">O que vamos fazer hoje?</p>
+          </div>
+
+          {isLoadingServices ? (
+             <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gold-main"></div></div>
+          ) : (
+            services.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {services.map(service => (
+                  <div key={service.id} className="bg-grafite-main border border-grafite-border p-5 rounded-xl hover:border-gold-main/50 transition-all cursor-pointer group" onClick={() => handleSelectService(service)}>
+                    <div className="flex justify-between items-start mb-2">
+                      <h4 className="text-lg font-bold text-text-primary group-hover:text-gold-main transition-colors">{service.name}</h4>
+                      <Scissors className="text-text-secondary group-hover:text-gold-main" size={20}/>
+                    </div>
+                    <div className="flex justify-between items-end mt-4">
+                      <span className="text-gold-main font-bold text-xl">R$ {service.price.toFixed(2)}</span>
+                      <span className="text-xs text-text-secondary bg-grafite-surface px-2 py-1 rounded">{service.duration} min</span>
+                    </div>
+                  </div>
                 ))}
               </div>
-            )}
-            {availableSlots.length === 0 && !isLoadingSlots && (
-              <p>Nenhum horário livre para este dia.</p>
-            )}
+            ) : (
+              <p className="text-center text-text-secondary py-8">Nenhum serviço disponível.</p>
+            )
+          )}
+        </section>
+      </div>
+    );
+  }
+
+  // ETAPA 2: Profissionais
+  if (selectedService && !selectedProfessional) {
+    return (
+      <div className="max-w-5xl mx-auto p-4 animate-fade-in">
+        <button onClick={resetSelection} className="mb-6 flex items-center text-gold-main hover:underline gap-2 text-sm">
+          <ArrowLeft size={16}/> Voltar aos Serviços
+        </button>
+        
+        <section className="card-premium">
+          <div className="border-b border-grafite-border pb-4 mb-6">
+             <h2 className="text-2xl font-heading font-bold text-gold-main">Escolha o Profissional</h2>
+             <p className="text-text-secondary text-sm">Quem você prefere para: <span className="text-text-primary font-semibold">{selectedService.name}</span></p>
+          </div>
+
+          {isLoadingProfessionals ? (
+             <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gold-main"></div></div>
+          ) : (
+            availableProfessionals.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                {availableProfessionals.map(prof => (
+                  <div key={prof.id} className="bg-grafite-main border border-grafite-border p-6 rounded-xl hover:shadow-glow hover:border-gold-main/50 transition-all cursor-pointer flex flex-col items-center gap-4 text-center group" onClick={() => handleSelectProfessional(prof)}>
+                    <div className="w-16 h-16 rounded-full bg-grafite-surface border-2 border-grafite-border flex items-center justify-center text-2xl font-bold text-gold-main group-hover:border-gold-main transition-colors">
+                      {prof.name.charAt(0).toUpperCase()}
+                    </div>
+                    <h4 className="text-lg font-bold text-text-primary">{prof.name}</h4>
+                    <span className="text-xs text-gold-main border border-gold-main/30 px-3 py-1 rounded-full">Selecionar</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-center text-text-secondary py-8">Nenhum profissional disponível para este serviço.</p>
+            )
+          )}
+        </section>
+      </div>
+    );
+  }
+
+  // ETAPA 3: Calendário e Pagamento
+  if (selectedService && selectedProfessional) {
+    return (
+      <div className="max-w-6xl mx-auto p-4 animate-fade-in">
+        <button onClick={backToProfessionals} className="mb-6 flex items-center text-gold-main hover:underline gap-2 text-sm">
+          <ArrowLeft size={16}/> Voltar
+        </button>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          
+          {/* Resumo da Seleção */}
+          <div className="lg:col-span-4 space-y-6">
+             <div className="card-premium">
+                <h3 className="text-lg font-heading font-bold text-text-primary mb-4 border-b border-grafite-border pb-2">Resumo</h3>
+                <div className="space-y-4">
+                   <div>
+                      <p className="text-xs text-text-secondary uppercase">Serviço</p>
+                      <p className="text-gold-main font-bold text-lg">{selectedService.name}</p>
+                      <p className="text-sm text-text-primary">R$ {selectedService.price.toFixed(2)} • {selectedService.duration} min</p>
+                   </div>
+                   <div>
+                      <p className="text-xs text-text-secondary uppercase">Profissional</p>
+                      <p className="text-text-primary font-medium">{selectedProfessional.name}</p>
+                   </div>
+                   <div>
+                      <p className="text-xs text-text-secondary uppercase">Data</p>
+                      <p className="text-text-primary font-medium capitalize">
+                        {selectedDate.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
+                      </p>
+                   </div>
+                </div>
+             </div>
+          </div>
+
+          {/* Calendário e Slots */}
+          <div className="lg:col-span-8 space-y-6">
+             <div className="card-premium">
+                <div className="flex flex-col md:flex-row gap-8">
+                   
+                   {/* Calendário Customizado */}
+                   <div className="flex-1 flex justify-center md:justify-start">
+                      <div className="calendar-wrapper text-text-primary">
+                        <Calendar 
+                          onChange={handleSelectDate} 
+                          value={selectedDate}
+                          minDate={new Date()}
+                          className="react-calendar border-none bg-transparent"
+                          tileClassName={({ date, view }) => {
+                             // Lógica simples para destacar dias (opcional)
+                             if(view === 'month' && date.getDay() === 0) return 'text-red-400'; 
+                             return null;
+                          }}
+                        />
+                      </div>
+                   </div>
+
+                   {/* Slots */}
+                   <div className="flex-1 border-l border-grafite-border pl-0 md:pl-8 pt-6 md:pt-0">
+                      <h4 className="text-sm font-bold text-text-secondary uppercase mb-4">Horários Disponíveis</h4>
+                      {isLoadingSlots ? (
+                        <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-gold-main"></div></div>
+                      ) : (
+                        availableSlots.length > 0 ? (
+                          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                            {availableSlots.map(slot => (
+                              <button 
+                                key={slot} 
+                                onClick={() => handleSlotClick(slot)} 
+                                className="py-2 px-1 rounded border border-grafite-border bg-grafite-main text-text-primary hover:bg-gold-main hover:text-grafite-main hover:border-gold-main transition-all text-sm font-medium"
+                              >
+                                {slot}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-text-secondary italic">Nenhum horário livre nesta data.</p>
+                        )
+                      )}
+                   </div>
+                </div>
+             </div>
           </div>
         </div>
+
+        {/* MODAL DE ESCOLHA DE PAGAMENTO */}
+        {showPaymentModal && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in p-4">
+             <div className="bg-grafite-card border border-grafite-border rounded-xl shadow-premium p-6 max-w-md w-full space-y-6">
+                <div className="text-center">
+                   <h3 className="text-2xl font-heading font-bold text-white mb-2">Como deseja pagar?</h3>
+                   <p className="text-text-secondary text-sm">O pagamento online agiliza seu atendimento, mas você também pode pagar no balcão.</p>
+                </div>
+                
+                <div className="grid grid-cols-1 gap-3">
+                   <button 
+                     onClick={() => processBooking('online')}
+                     className="flex items-center justify-between p-4 rounded-lg border border-gold-main/30 bg-gold-dim/10 hover:bg-gold-main hover:text-grafite-main group transition-all"
+                   >
+                      <div className="flex items-center gap-3">
+                         <CreditCard className="text-gold-main group-hover:text-grafite-main" size={20}/>
+                         <span className="font-semibold">Pagar Agora (Online)</span>
+                      </div>
+                      <span className="text-xs bg-gold-main text-grafite-main px-2 py-1 rounded font-bold group-hover:bg-grafite-main group-hover:text-gold-main">Recomendado</span>
+                   </button>
+
+                   <button 
+                     onClick={() => processBooking('in_store')}
+                     className="flex items-center justify-start gap-3 p-4 rounded-lg border border-grafite-border bg-grafite-main hover:bg-grafite-surface transition-all text-text-primary"
+                   >
+                      <Store className="text-text-secondary" size={20}/>
+                      <span className="font-medium">Pagar na Barbearia</span>
+                   </button>
+                </div>
+
+                <button 
+                  onClick={() => setShowPaymentModal(false)} 
+                  className="w-full text-center text-text-secondary text-sm hover:text-white transition-colors"
+                >
+                  Cancelar
+                </button>
+             </div>
+          </div>
+        )}
+
       </div>
     );
   }

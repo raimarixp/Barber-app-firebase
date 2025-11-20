@@ -1,18 +1,19 @@
 // src/components/ShopRegistration/ShopRegistration.jsx
-// (Atualizado com CLOUDINARY em vez de Firebase Storage)
+// (COMPLETO - Visual Premium + Cloudinary + Tailwind + Sonner)
 
 import { useState } from 'react';
-import styles from './ShopRegistration.module.css'; 
-// 1. REMOVEMOS 'storage' daqui
 import { db, auth } from '../../firebase/firebase-config'; 
 import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { doc, writeBatch, collection } from "firebase/firestore";
-// 2. REMOVEMOS 'ref', 'uploadBytes', 'getDownloadURL'
+import { toast } from 'sonner';
+import { 
+  Store, User, Mail, Lock, MapPin, FileText, Upload, ArrowLeft, Image as ImageIcon 
+} from 'lucide-react';
 
 function ShopRegistration({ onBack }) {
   const [isLoading, setIsLoading] = useState(false);
   
-  // Estados (sem mudança)
+  // Estados
   const [ownerName, setOwnerName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -21,14 +22,18 @@ function ShopRegistration({ onBack }) {
   const [shopCity, setShopCity] = useState('');
   const [shopDescription, setShopDescription] = useState('');
   const [shopLogoFile, setShopLogoFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null); // Estado para preview da imagem
 
   const handleLogoChange = (e) => {
     if (e.target.files[0]) {
-      setShopLogoFile(e.target.files[0]);
+      const file = e.target.files[0];
+      setShopLogoFile(file);
+      // Cria URL temporária para preview
+      setPreviewUrl(URL.createObjectURL(file));
     }
   };
 
-  // --- 3. (NOVA) Função de Upload do Cloudinary ---
+  // --- Função de Upload do Cloudinary ---
   const uploadImageToCloudinary = async (file) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -45,42 +50,43 @@ function ShopRegistration({ onBack }) {
       const data = await response.json();
       
       if (data.secure_url) {
-        return data.secure_url; // Esta é a URL da imagem!
+        return data.secure_url;
       } else {
         throw new Error(data.error.message || 'Falha no upload do Cloudinary');
       }
     } catch (error) {
       console.error("Erro no upload do Cloudinary:", error);
-      throw error; // Repassa o erro para o handleRegister
+      throw error;
     }
   };
-  // --- Fim da Nova Função ---
 
   const handleRegister = async (e) => {
     e.preventDefault();
-    if (password.length < 6) { /* ... (validação de senha) ... */ }
+    
+    if (password.length < 6) {
+      toast.warning("A senha deve ter pelo menos 6 caracteres.");
+      return;
+    }
     if (!shopLogoFile) {
-      alert("Por favor, selecione uma logo para sua loja.");
+      toast.warning("Por favor, selecione uma logo para sua loja.");
       return;
     }
     
     setIsLoading(true);
+    const loadingToast = toast.loading("Criando sua barbearia...");
 
     try {
-      // 1. Criar Auth (sem mudança)
+      // 1. Criar Auth
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
       await updateProfile(user, { displayName: ownerName });
       
-      // --- 4. (MUDANÇA) Fazer Upload da Logo ---
-      let logoUrl = '';
-      console.log("Enviando logo para o Cloudinary...");
-      // Chama nossa nova função de upload
-      logoUrl = await uploadImageToCloudinary(shopLogoFile); 
-      console.log("Logo enviada, URL:", logoUrl);
-      // --- Fim da Mudança ---
-
-      // 5. Preparar Batch do Firestore (sem mudança)
+      // 2. Upload da Logo
+      toast.loading("Enviando logo...", { id: loadingToast });
+      const logoUrl = await uploadImageToCloudinary(shopLogoFile); 
+      
+      // 3. Preparar Batch do Firestore
+      toast.loading("Finalizando cadastro...", { id: loadingToast });
       const batch = writeBatch(db);
       const shopDocRef = doc(collection(db, "barbershops"));
       const normalizedCity = shopCity.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -93,96 +99,209 @@ function ShopRegistration({ onBack }) {
         ownerId: user.uid,
         createdAt: new Date(),
         description: shopDescription,
-        logoUrl: logoUrl // Salva a URL do Cloudinary
+        logoUrl: logoUrl,
+        onlinePaymentEnabled: false, // Padrão
+        requirePayment: false // Padrão
       });
       
-      // 6. Preparar 'users' e 'roles' (sem mudança)
+      // 4. Preparar 'users' e 'roles'
       const userDocRef = doc(db, "users", user.uid);
       batch.set(userDocRef, { uid: user.uid, displayName: ownerName, email: user.email });
       const roleDocRef = doc(db, "roles", user.uid); 
       batch.set(roleDocRef, { role: "admin", managingShopId: shopDocRef.id });
       
-      // 7. Salvar tudo (sem mudança)
+      // 5. Salvar tudo
       await batch.commit();
-      alert("Barbearia cadastrada com sucesso!");
+      
+      toast.dismiss(loadingToast);
+      toast.success("Barbearia cadastrada com sucesso!");
+
+      // O App.jsx vai detectar a mudança de auth e redirecionar, 
+      // mas podemos limpar o form se necessário.
 
     } catch (error) {
       console.error("Erro ao cadastrar barbearia: ", error);
-      alert("Erro: " + error.message);
+      toast.dismiss(loadingToast);
+      
+      if(error.code === 'auth/email-already-in-use') {
+        toast.error("Este e-mail já está em uso.");
+      } else {
+        toast.error("Erro ao cadastrar: " + error.message);
+      }
     } finally {
       setIsLoading(false);
     }
   };
   
-  // --- RENDERIZAÇÃO (JSX) ---
-  // (O JSX é 100% o mesmo, não mudamos nada visual)
   return (
-    <div className={styles.panel}>
-      <button onClick={onBack} className={styles.backButton}>
-        &larr; Voltar
-      </button>
-      <h2 className={styles.sectionTitle}>Cadastre sua Barbearia</h2>
-      <p>Crie sua conta de Dono e cadastre sua loja na plataforma.</p>
+    <div className="max-w-4xl mx-auto p-4 animate-fade-in">
       
-      <form onSubmit={handleRegister} className={styles.form}>
-        <h4>Seus Dados (Dono)</h4>
+      <button onClick={onBack} className="mb-6 flex items-center text-gold-main hover:underline gap-2 text-sm transition-all">
+        <ArrowLeft size={16}/> Voltar
+      </button>
+
+      <div className="text-center mb-8">
+        <h2 className="text-3xl font-heading font-bold text-gold-main mb-2">Cadastre sua Barbearia</h2>
+        <p className="text-text-secondary">Junte-se à plataforma e gerencie seu negócio com estilo.</p>
+      </div>
+      
+      <form onSubmit={handleRegister} className="card-premium space-y-8">
         
-        <label className={styles.formField} htmlFor="ownerName">
-          <span>Seu Nome Completo:</span>
-          <input type="text" value={ownerName} onChange={(e) => setOwnerName(e.target.value)} id="ownerName" name="name" required />
-        </label>
+        {/* --- Seção 1: Dados do Dono --- */}
+        <div>
+          <h3 className="text-xl font-heading font-semibold text-text-primary mb-4 flex items-center gap-2">
+            <User className="text-gold-main" size={20}/>
+            Dados do Proprietário
+          </h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-secondary ml-1" htmlFor="ownerName">Nome Completo</label>
+              <div className="relative">
+                <User className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" size={16} />
+                <input 
+                  type="text" id="ownerName" 
+                  value={ownerName} onChange={(e) => setOwnerName(e.target.value)} 
+                  className="input-premium pl-10" placeholder="Seu nome" required 
+                />
+              </div>
+            </div>
+            
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-secondary ml-1" htmlFor="ownerEmail">E-mail de Login</label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" size={16} />
+                <input 
+                  type="email" id="ownerEmail" 
+                  value={email} onChange={(e) => setEmail(e.target.value)} 
+                  className="input-premium pl-10" placeholder="seu@email.com" required 
+                />
+              </div>
+            </div>
+            
+            <div className="space-y-1 md:col-span-2">
+              <label className="text-xs font-medium text-text-secondary ml-1" htmlFor="ownerPassword">Senha de Acesso</label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" size={16} />
+                <input 
+                  type="password" id="ownerPassword" 
+                  value={password} onChange={(e) => setPassword(e.target.value)} 
+                  className="input-premium pl-10" placeholder="Mínimo 6 caracteres" required 
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <hr className="border-grafite-border" />
+
+        {/* --- Seção 2: Dados da Barbearia --- */}
+        <div>
+          <h3 className="text-xl font-heading font-semibold text-text-primary mb-4 flex items-center gap-2">
+            <Store className="text-gold-main" size={20}/>
+            Dados da Barbearia
+          </h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1 md:col-span-2">
+              <label className="text-xs font-medium text-text-secondary ml-1" htmlFor="shopName">Nome da Barbearia</label>
+              <div className="relative">
+                <Store className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" size={16} />
+                <input 
+                  type="text" id="shopName" 
+                  value={shopName} onChange={(e) => setShopName(e.target.value)} 
+                  className="input-premium pl-10" placeholder="Ex: Barbearia Viking" required 
+                />
+              </div>
+            </div>
+            
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-secondary ml-1" htmlFor="shopCity">Cidade</label>
+              <div className="relative">
+                <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" size={16} />
+                <input 
+                  type="text" id="shopCity" 
+                  value={shopCity} onChange={(e) => setShopCity(e.target.value)} 
+                  className="input-premium pl-10" placeholder="Ex: São Paulo" required 
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-secondary ml-1" htmlFor="shopAddress">Endereço</label>
+              <div className="relative">
+                <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" size={16} />
+                <input 
+                  type="text" id="shopAddress" 
+                  value={shopAddress} onChange={(e) => setShopAddress(e.target.value)} 
+                  className="input-premium pl-10" placeholder="Rua, Número, Bairro" required 
+                />
+              </div>
+            </div>
+            
+            <div className="space-y-1 md:col-span-2">
+              <label className="text-xs font-medium text-text-secondary ml-1" htmlFor="shopDescription">Descrição</label>
+              <div className="relative">
+                <FileText className="absolute left-3 top-4 text-text-secondary" size={16} />
+                <textarea
+                  id="shopDescription" 
+                  value={shopDescription} onChange={(e) => setShopDescription(e.target.value)}
+                  className="input-premium pl-10 resize-none" 
+                  rows="3" 
+                  placeholder="Fale um pouco sobre sua história e estilo..."
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Upload Customizado */}
+            <div className="space-y-1 md:col-span-2">
+              <span className="text-xs font-medium text-text-secondary ml-1">Logo da Barbearia</span>
+              <label 
+                htmlFor="shopLogo" 
+                className={`
+                  flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-lg cursor-pointer transition-colors
+                  ${previewUrl ? 'border-gold-main bg-grafite-main' : 'border-grafite-border bg-grafite-surface hover:bg-grafite-main hover:border-gold-main/50'}
+                `}
+              >
+                {previewUrl ? (
+                  <div className="relative w-full h-full p-2 flex items-center justify-center">
+                     <img src={previewUrl} alt="Preview" className="h-full object-contain rounded" />
+                     <div className="absolute inset-0 bg-black/50 opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity rounded">
+                        <p className="text-white text-sm font-medium flex items-center gap-2"><Upload size={16}/> Alterar</p>
+                     </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                    <ImageIcon className="w-8 h-8 mb-2 text-text-secondary" />
+                    <p className="text-sm text-text-secondary">
+                      <span className="font-semibold text-gold-main">Clique para enviar</span> ou arraste
+                    </p>
+                    <p className="text-xs text-text-secondary/70">JPG ou PNG (MAX. 2MB)</p>
+                  </div>
+                )}
+                <input 
+                  id="shopLogo" 
+                  type="file" 
+                  className="hidden" 
+                  accept="image/png, image/jpeg"
+                  onChange={handleLogoChange}
+                  required={!previewUrl}
+                />
+              </label>
+            </div>
+
+          </div>
+        </div>
         
-        <label className={styles.formField} htmlFor="ownerEmail">
-          <span>Seu Email de Login:</span>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} id="ownerEmail" name="email" required />
-        </label>
-        
-        <label className={styles.formField} htmlFor="ownerPassword">
-          <span>Sua Senha:</span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} id="ownerPassword" name="new-password" required />
-        </label>
-        
-        <hr style={{margin: '10px 0'}}/>
-        <h4>Dados da Barbearia</h4>
-        
-        <label className={styles.formField} htmlFor="shopName">
-          <span>Nome da Barbearia:</span>
-          <input type="text" value={shopName} onChange={(e) => setShopName(e.target.value)} id="shopName" name="organization" required />
-        </label>
-        
-        <label className={styles.formField} htmlFor="shopAddress">
-          <span>Endereço da Barbearia:</span>
-          <input type="text" value={shopAddress} onChange={(e) => setShopAddress(e.target.value)} id="shopAddress" name="street-address" required />
-        </label>
-        
-        <label className={styles.formField} htmlFor="shopCity">
-          <span>Cidade:</span>
-          <input type="text" value={shopCity} onChange={(e) => setShopCity(e.target.value)} id="shopCity" name="city" required />
-        </label>
-        
-        <label className={styles.formField} htmlFor="shopDescription">
-          <span>Sobre sua Barbearia (Descrição):</span>
-          <textarea
-            id="shopDescription" name="shopDescription"
-            value={shopDescription} onChange={(e) => setShopDescription(e.target.value)}
-            rows="4" required
-          />
-        </label>
-        
-        <label className={styles.formField} htmlFor="shopLogo">
-          <span>Logo da Barbearia (Arquivo):</span>
-          <input 
-            type="file" 
-            id="shopLogo" name="shopLogo"
-            accept="image/png, image/jpeg"
-            onChange={handleLogoChange}
-            required 
-          />
-        </label>
-        
-        <button type="submit" disabled={isLoading} className={styles.submitButton}>
-          {isLoading ? 'Cadastrando...' : 'Finalizar Cadastro'}
+        <button 
+          type="submit" 
+          disabled={isLoading} 
+          className="btn-primary w-full h-12 text-lg shadow-glow mt-6"
+        >
+          {isLoading ? 'Processando...' : 'Finalizar Cadastro'}
         </button>
+
       </form>
     </div>
   );
