@@ -1,18 +1,18 @@
 // src/components/ProfessionalPanel/ProfessionalPanel.jsx
-// (COMPLETO - Com Nova Aba "Performance", Agendamento Manual, Configurações e Estilo Premium Dark)
+// (COMPLETO & CORRIGIDO - Correção de shopProfile e Dados da Loja)
 
 import { useState, useEffect, useCallback } from 'react';
 import { db, auth } from '../../firebase/firebase-config';
 import { 
-  doc, collection, getDocs, updateDoc, setDoc,
-  getDoc, writeBatch, addDoc, onSnapshot,
+  doc, collection, getDocs, updateDoc, setDoc, getDoc,
+  writeBatch, addDoc, onSnapshot,
   query, deleteDoc, Timestamp, where
 } from "firebase/firestore";
 import { useShop } from '../../App.jsx';
 import { toast } from 'sonner'; 
 import { 
     Calendar, Clock, Scissors, Ban, CheckCircle, XCircle, User, Plus, UserPlus, 
-    Zap, DollarSign, TrendingUp, TrendingDown, ClipboardCheck, FileText
+    Zap, DollarSign, TrendingUp, TrendingDown, ClipboardCheck, FileText, Package, Minus, ShoppingBag, MessageCircle
 } from 'lucide-react';
 
 const daysOfWeek = [
@@ -22,150 +22,132 @@ const daysOfWeek = [
   { key: 'saturday', label: 'Sábado' },
 ];
 
-// Taxa de comissão de serviço como placeholder (idealmente viria do Firestore)
-const SERVICE_COMMISSION_RATE = 0.40; // 40%
+const SERVICE_COMMISSION_RATE = 0.40; 
 
 function ProfessionalPanel() {
   const { managedShopId } = useShop();
+  const professionalId = auth.currentUser ? auth.currentUser.uid : null;
 
-  // --- Estados de Navegação e Carregamento ---
-  const [activeTab, setActiveTab] = useState('agenda'); // 'agenda', 'booking', 'config', 'performance'
+  // --- Estados de Navegação ---
+  const [activeTab, setActiveTab] = useState('agenda'); 
+  
+  // --- Loadings ---
   const [isLoadingHours, setIsLoadingHours] = useState(true);
   const [isLoadingServices, setIsLoadingServices] = useState(true);
   const [isLoadingBlocks, setIsLoadingBlocks] = useState(true);
   const [isLoadingAgenda, setIsLoadingAgenda] = useState(true);
   const [isLoadingPerformance, setIsLoadingPerformance] = useState(true);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false); 
 
-  // --- Estados de Dados ---
+  // --- Dados Principais ---
+  const [shopData, setShopData] = useState(null); // CORREÇÃO: Armazena nome e endereço da loja
   const [allServices, setAllServices] = useState([]); 
+  const [products, setProducts] = useState([]); 
   const [myServiceIds, setMyServiceIds] = useState(new Set()); 
   const [workingHours, setWorkingHours] = useState([]); 
   const [blockedTimes, setBlockedTimes] = useState([]); 
   const [todayAppointments, setTodayAppointments] = useState([]);
   
-  // Estados do Formulário de Bloqueio
+  // --- Estados do Formulário de Bloqueio ---
   const [blockReason, setBlockReason] = useState('Almoço');
   const [blockStartTime, setBlockStartTime] = useState('12:00');
   const [blockEndTime, setBlockEndTime] = useState('13:00');
   const [blockType, setBlockType] = useState('recurring'); 
   const [blockDay, setBlockDay] = useState('monday');
   const [blockDate, setBlockDate] = useState(new Date().toISOString().split('T')[0]);
-  
-  // Estados do Novo Agendamento Manual (PRO)
+
+  // --- Estados do Agendamento Manual ---
   const [manualClientName, setManualClientName] = useState('');
+  const [manualClientPhone, setManualClientPhone] = useState('');
   const [manualServiceId, setManualServiceId] = useState('');
   const [manualDate, setManualDate] = useState(new Date().toISOString().split('T')[0]);
   const [manualTime, setManualTime] = useState('09:00');
+  const [manualCart, setManualCart] = useState([]); 
   const [isBookingManual, setIsBookingManual] = useState(false);
   
-  // Estado de Performance
+  // --- Estado de Performance ---
   const [performanceData, setPerformanceData] = useState({
-      totalRevenue: 0,
-      totalCommission: 0,
-      servicesCompleted: 0
+      totalRevenue: 0, totalCommission: 0, servicesCompleted: 0
   });
 
-  const professionalId = auth.currentUser ? auth.currentUser.uid : null;
+  // --- CARREGAMENTO DE DADOS ---
 
-  // --- Lógica de Carregamento ---
+  // Busca dados da loja (Nome e Endereço para o WhatsApp)
+  useEffect(() => {
+    if (managedShopId) {
+        getDoc(doc(db, "barbershops", managedShopId)).then(snap => {
+            if (snap.exists()) setShopData(snap.data());
+        });
+    }
+  }, [managedShopId]);
+
   const fetchWorkingHours = useCallback(async () => {
     if (!professionalId) return;
     setIsLoadingHours(true);
     try {
-      const hoursCollectionRef = collection(db, "professionals", professionalId, "workingHours");
-      const querySnapshot = await getDocs(hoursCollectionRef);
+      const querySnapshot = await getDocs(collection(db, "professionals", professionalId, "workingHours"));
       let hoursData = {};
       querySnapshot.forEach(doc => { hoursData[doc.id] = doc.data(); });
       
-      let needsUpdate = false;
       const completeHours = daysOfWeek.map(day => {
-        if (hoursData[day.key]) {
-          return { id: day.key, ...hoursData[day.key] };
-        } else {
-          needsUpdate = true;
-          return { id: day.key, day: day.label, isWorking: (day.key !== 'sunday'), startTime: "09:00", endTime: "18:00" };
-        }
+        if (hoursData[day.key]) return { id: day.key, ...hoursData[day.key] };
+        return { id: day.key, day: day.label, isWorking: (day.key !== 'sunday'), startTime: "09:00", endTime: "18:00" };
       });
-
-      if (needsUpdate) {
-        const batch = writeBatch(db);
-        for (const day of completeHours) {
-          const dayDocRef = doc(db, "professionals", professionalId, "workingHours", day.id);
-          batch.set(dayDocRef, day); 
-        }
-        await batch.commit();
-      }
       setWorkingHours(completeHours);
-    } catch (error) { 
-      console.error("Erro ao buscar horários: ", error); 
-      toast.error("Erro ao carregar horários.");
-    } finally { 
-      setIsLoadingHours(false); 
-    }
+    } catch (error) { toast.error("Erro ao carregar horários."); } 
+    finally { setIsLoadingHours(false); }
   }, [professionalId]);
   
   const fetchAllServices = useCallback(async () => {
     if (!managedShopId) return;
     setIsLoadingServices(true);
     try {
-      const servicesQuery = query(
-        collection(db, "services"),
-        where("barbershopId", "==", managedShopId)
-      );
-      const querySnapshot = await getDocs(servicesQuery);
-      const servicesList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setAllServices(servicesList);
-      if(servicesList.length > 0 && !manualServiceId) setManualServiceId(servicesList[0].id);
-    } catch (error) { 
-      console.error("Erro ao buscar serviços: ", error); 
-    } finally { 
-      setIsLoadingServices(false); 
-    }
+      const q = query(collection(db, "services"), where("barbershopId", "==", managedShopId));
+      const querySnapshot = await getDocs(q);
+      const list = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setAllServices(list);
+      if(list.length > 0 && !manualServiceId) setManualServiceId(list[0].id);
+    } catch (error) { console.error("Erro serviços:", error); } 
+    finally { setIsLoadingServices(false); }
   }, [managedShopId, manualServiceId]);
+
+  const fetchProducts = useCallback(async () => {
+    if (!managedShopId) return;
+    setIsLoadingProducts(true);
+    try {
+        const q = query(collection(db, "products"), where("barbershopId", "==", managedShopId));
+        const snapshot = await getDocs(q);
+        setProducts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    } catch (error) { console.error("Erro produtos:", error); } 
+    finally { setIsLoadingProducts(false); }
+  }, [managedShopId]);
   
   const fetchMyServices = useCallback(async () => {
     if (!professionalId) return;
     try {
-      const profDocRef = doc(db, "professionals", professionalId);
-      const docSnap = await getDoc(profDocRef);
-      if (docSnap.exists()) {
-        setMyServiceIds(new Set(docSnap.data().services || []));
-      }
-    } catch (error) { 
-      console.error("Erro ao buscar meus serviços: ", error); 
-    }
+      const docSnap = await getDoc(doc(db, "professionals", professionalId));
+      if (docSnap.exists()) setMyServiceIds(new Set(docSnap.data().services || []));
+    } catch (error) { console.error("Erro meus serviços:", error); }
   }, [professionalId]);
   
   const fetchBlockedTimes = useCallback(() => {
     if (!professionalId) return; 
     setIsLoadingBlocks(true);
-    const blocksCollectionRef = collection(db, "professionals", professionalId, "blockedTimes");
-    
-    const unsubscribe = onSnapshot(blocksCollectionRef, (querySnapshot) => {
-      const blocksList = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setBlockedTimes(blocksList);
-      setIsLoadingBlocks(false);
-    }, (error) => {
-      console.error("Erro ao ouvir bloqueios: ", error);
+    return onSnapshot(collection(db, "professionals", professionalId, "blockedTimes"), (snap) => {
+      setBlockedTimes(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       setIsLoadingBlocks(false);
     });
-    return unsubscribe;
   }, [professionalId]);
 
   const fetchPerformanceData = useCallback(async () => {
     if (!professionalId) return;
     setIsLoadingPerformance(true);
-
     try {
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-        // Busca todos os agendamentos CONCLUÍDOS no mês
-        const appointmentsQuery = query(
+        const q = query(
             collection(db, "appointments"),
             where("professionalId", "==", professionalId),
             where("status", "==", "completed"),
@@ -173,65 +155,41 @@ function ProfessionalPanel() {
             where("startTime", "<=", Timestamp.fromDate(endOfMonth))
         );
 
-        const snapshot = await getDocs(appointmentsQuery);
-        
+        const snapshot = await getDocs(q);
         let totalRevenue = 0;
         let servicesCompleted = 0;
-        const serviceCache = {};
 
-        const processAppointments = snapshot.docs.map(async (docSnap) => {
+        snapshot.forEach(docSnap => {
             const appData = docSnap.data();
             servicesCompleted++;
-
-            let price = 0;
-            const serviceId = appData.serviceId;
-
-            if (serviceCache[serviceId] === undefined) {
-                const serviceDoc = await getDoc(doc(db, "services", serviceId));
-                price = serviceDoc.exists() ? serviceDoc.data().price || 0 : 0;
-                serviceCache[serviceId] = price;
-            } else {
-                price = serviceCache[serviceId];
-            }
-            
-            totalRevenue += price;
+            totalRevenue += appData.totalPrice || 0; 
         });
-
-        await Promise.all(processAppointments);
         
         const totalCommission = totalRevenue * SERVICE_COMMISSION_RATE;
+        setPerformanceData({ totalRevenue, totalCommission, servicesCompleted });
 
-        setPerformanceData({
-            totalRevenue,
-            totalCommission,
-            servicesCompleted
-        });
-
-    } catch (error) {
-        console.error("Erro ao buscar performance:", error);
-        toast.error("Erro ao carregar dados de performance.");
-    } finally {
-        setIsLoadingPerformance(false);
-    }
+    } catch (error) { 
+      console.error("Erro performance:", error);
+    } 
+    finally { setIsLoadingPerformance(false); }
   }, [professionalId]);
 
-  // Efeito Principal (Carrega tudo)
+  // --- EFEITO PRINCIPAL ---
   useEffect(() => {
     if (!managedShopId || !professionalId) return;
     
     fetchWorkingHours();
     fetchAllServices();
     fetchMyServices();
+    fetchProducts(); 
     const unsubscribeBlocks = fetchBlockedTimes();
     
-    // AGENDA EM TEMPO REAL (HOJE)
+    // Agenda em tempo real
     setIsLoadingAgenda(true);
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
     
-    const appointmentsQuery = query(
+    const q = query(
       collection(db, "appointments"),
       where("professionalId", "==", professionalId),
       where("startTime", ">=", Timestamp.fromDate(todayStart)),
@@ -239,64 +197,116 @@ function ProfessionalPanel() {
       where("status", "in", ["confirmed", "checked_in"])
     );
 
-    const unsubscribeAgenda = onSnapshot(appointmentsQuery, async (querySnapshot) => {
-      const appointmentsList = [];
-      for (const appDoc of querySnapshot.docs) {
-        const appData = { id: appDoc.id, ...appDoc.data() };
+    const unsubscribeAgenda = onSnapshot(q, async (snap) => {
+      const list = [];
+      for (const d of snap.docs) {
+        const data = { id: d.id, ...d.data() };
         
-        if (appData.clientNameManual) {
-            appData.clientName = appData.clientNameManual + " (Avulso)";
+        if (data.clientNameManual) {
+            data.clientName = data.clientNameManual + " (Avulso)";
         } else {
             try {
-              const userDoc = await getDoc(doc(db, "users", appData.clientId));
-              appData.clientName = userDoc.exists() ? userDoc.data().displayName : "Cliente";
-            } catch (e) { appData.clientName = "Cliente"; }
+              const u = await getDoc(doc(db, "users", data.clientId));
+              data.clientName = u.exists() ? u.data().displayName : "Cliente";
+              if (u.exists() && u.data().phoneNumber) data.clientPhone = u.data().phoneNumber;
+            } catch (e) { data.clientName = "Cliente"; }
         }
         
-        try {
-          const serviceDoc = await getDoc(doc(db, "services", appData.serviceId));
-          appData.serviceName = serviceDoc.exists() ? serviceDoc.data().name : "Serviço";
-        } catch (e) { appData.serviceName = "Serviço"; }
+        if (data.orderItems && data.orderItems.length > 0) {
+            const mainService = data.orderItems.find(i => i.type === 'service');
+            data.serviceName = mainService ? mainService.name : "Venda";
+            data.productsCount = data.orderItems.filter(i => i.type === 'product').length;
+        } else {
+            try {
+                const s = await getDoc(doc(db, "services", data.serviceId));
+                data.serviceName = s.exists() ? s.data().name : "Serviço";
+            } catch (e) { data.serviceName = "Serviço"; }
+        }
         
-        appointmentsList.push(appData);
+        list.push(data);
       }
-      
-      appointmentsList.sort((a, b) => a.startTime.seconds - b.startTime.seconds);
-      setTodayAppointments(appointmentsList);
-      setIsLoadingAgenda(false);
-    }, (error) => {
-      console.error("Erro ao ouvir agenda: ", error);
+      list.sort((a, b) => a.startTime.seconds - b.startTime.seconds);
+      setTodayAppointments(list);
       setIsLoadingAgenda(false);
     });
 
-    // Recarrega performance quando a aba é ativada
-    if (activeTab === 'performance') {
-        fetchPerformanceData();
-    }
+    if (activeTab === 'performance') fetchPerformanceData();
 
     return () => {
-      if (unsubscribeBlocks) unsubscribeBlocks();
+      if (unsubscribeBlocks && typeof unsubscribeBlocks === 'function') unsubscribeBlocks();
       unsubscribeAgenda();
     };
-    
-  }, [managedShopId, professionalId, activeTab, fetchWorkingHours, fetchAllServices, fetchMyServices, fetchBlockedTimes, fetchPerformanceData]);
+  }, [managedShopId, professionalId, activeTab, fetchWorkingHours, fetchAllServices, fetchMyServices, fetchBlockedTimes, fetchPerformanceData, fetchProducts]);
   
-  // --- FUNÇÕES DE AÇÃO ---
+  // --- AÇÕES ---
+
+  // CORREÇÃO: Usa shopData em vez de shopProfile
+  const handleSendWhatsapp = (app) => {
+      const phone = app.clientPhone;
+      if (!phone) {
+          toast.error("Cliente sem telefone cadastrado.");
+          return;
+      }
+      
+      const clientName = app.clientName.replace(' (Avulso)', '').split(' ')[0];
+      const date = app.startTime.toDate().toLocaleDateString('pt-BR', {day: 'numeric', month: 'long'});
+      const time = app.startTime.toDate().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+      const service = app.serviceName;
+      const total = app.totalPrice ? `R$ ${app.totalPrice.toFixed(2)}` : '';
+      
+      let message = `Olá, *${clientName}*! Tudo bem? 👋%0A%0A`;
+      message += `Aqui é da *${shopData?.name || 'Barbearia'}*.%0A`; // Usa shopData.name
+      message += `Passando para confirmar seu horário:%0A%0A`;
+      message += `🗓 *${date}*%0A`;
+      message += `⏰ *${time}*%0A`;
+      message += `✂ *${service}*`;
+      
+      if (total) message += `%0A💰 Valor: *${total}*`;
+      
+      if (shopData?.address) message += `%0A%0A📍 ${shopData.address}`; // Usa shopData.address
+      
+      message += `%0A%0AConfirmado? 👊`;
+      
+      const url = `https://wa.me/${phone.replace(/\D/g, '')}?text=${message}`; // Não usa encodeURIComponent aqui para manter as quebras %0A
+      window.open(url, '_blank');
+  };
+
+  const handleUpdateManualCart = (product, operation) => {
+    setManualCart(prev => {
+        const exists = prev.find(i => i.productId === product.id);
+        if(operation === 'add') {
+            if(exists) return prev.map(i => i.productId === product.id ? {...i, qty: i.qty + 1} : i);
+            return [...prev, { productId: product.id, name: product.name, price: Number(product.price), qty: 1 }];
+        }
+        if(operation === 'remove' && exists) {
+            if(exists.qty === 1) return prev.filter(i => i.productId !== product.id);
+            return prev.map(i => i.productId === product.id ? {...i, qty: i.qty - 1} : i);
+        }
+        return prev;
+    });
+  };
 
   const handleManualBooking = async (e) => {
     e.preventDefault();
     if(!manualClientName || !manualServiceId || !manualDate || !manualTime) {
-        toast.warning("Preencha todos os campos.");
+        toast.warning("Preencha os dados básicos.");
         return;
     }
 
     setIsBookingManual(true);
     try {
         const service = allServices.find(s => s.id === manualServiceId);
-        if(!service) throw new Error("Serviço não encontrado");
+        if(!service) throw new Error("Serviço inválido");
 
         const startTimestamp = new Date(manualDate + 'T' + manualTime);
         const endTimeObj = new Date(startTimestamp.getTime() + service.duration * 60000);
+
+        const orderItems = [
+            { type: 'service', id: service.id, name: service.name, price: Number(service.price), qty: 1 },
+            ...manualCart.map(p => ({ type: 'product', id: p.productId, name: p.name, price: p.price, qty: p.qty }))
+        ];
+
+        const totalPrice = orderItems.reduce((acc, item) => acc + (item.price * item.qty), 0);
 
         await addDoc(collection(db, "appointments"), {
             professionalId: professionalId,
@@ -305,17 +315,22 @@ function ProfessionalPanel() {
             startTime: Timestamp.fromDate(startTimestamp),
             endTime: Timestamp.fromDate(endTimeObj),
             status: "confirmed",
-            paymentMethod: "in_store",
+            paymentMethod: "in_store_combined",
             clientNameManual: manualClientName,
+            clientPhone: manualClientPhone,
             createdBy: "professional",
-            createdAt: Timestamp.now()
+            createdAt: Timestamp.now(),
+            orderItems: orderItems,
+            totalPrice: totalPrice
         });
 
-        toast.success(`Agendamento criado para ${manualClientName}!`);
+        toast.success(`Venda/Agendamento registrado! Total: R$ ${totalPrice.toFixed(2)}`);
         setManualClientName('');
+        setManualClientPhone('');
+        setManualCart([]); 
     } catch (error) {
         console.error("Erro manual:", error);
-        toast.error("Erro ao agendar: " + error.message);
+        toast.error("Erro ao registrar.");
     } finally {
         setIsBookingManual(false);
     }
@@ -336,7 +351,6 @@ function ProfessionalPanel() {
       await batch.commit();
       toast.success("Horários atualizados com sucesso!");
     } catch (error) {
-      console.error("Erro ao salvar horários: ", error);
       toast.error("Erro ao salvar horários.");
     } finally {
       setIsLoadingHours(false);
@@ -361,7 +375,6 @@ function ProfessionalPanel() {
       });
       toast.success("Sua lista de serviços foi atualizada!");
     } catch (error) {
-      console.error("Erro ao salvar meus serviços: ", error);
       toast.error("Erro ao salvar serviços.");
     } finally {
       setIsLoadingServices(false);
@@ -389,7 +402,6 @@ function ProfessionalPanel() {
       toast.success("Bloqueio adicionado!");
       setBlockReason('Almoço');
     } catch (error) {
-      console.error("Erro ao adicionar bloqueio: ", error);
       toast.error("Erro ao salvar bloqueio.");
     } finally {
       setIsLoadingBlocks(false);
@@ -403,7 +415,6 @@ function ProfessionalPanel() {
       await deleteDoc(blockDocRef);
       toast.success("Bloqueio removido.");
     } catch (error) {
-      console.error("Erro ao deletar bloqueio: ", error);
       toast.error("Erro ao remover bloqueio.");
     }
   };
@@ -412,10 +423,9 @@ function ProfessionalPanel() {
     const checkInPromise = updateDoc(doc(db, "appointments", appointmentId), {
        status: "checked_in"
     });
-    
     toast.promise(checkInPromise, {
       loading: 'Realizando Check-in...',
-      success: 'Check-in realizado! Cliente na loja.',
+      success: 'Check-in realizado!',
       error: 'Erro ao fazer check-in.'
     });
   };
@@ -444,14 +454,9 @@ function ProfessionalPanel() {
     }
   };
 
-  // --- RENDERIZAÇÃO DE SEÇÕES ---
+  // --- RENDERIZAÇÃO ---
 
-  // Componente de Carregamento Genérico
-  const LoadingSpinner = () => (
-    <div className="flex justify-center py-10">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gold-main"></div>
-    </div>
-  );
+  const Loading = () => <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gold-main"></div></div>;
 
   // 1. Agenda Section
   const renderAgenda = () => (
@@ -464,444 +469,177 @@ function ProfessionalPanel() {
             <span className="text-xs text-text-secondary bg-grafite-surface px-2 py-1 rounded border border-grafite-border">
                 {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
             </span>
-          </div>
-          
-          {isLoadingAgenda ? (
-             <LoadingSpinner />
-          ) : (
+         </div>
+         {isLoadingAgenda ? <Loading /> : (
             <div className="flex flex-col gap-4">
-              {todayAppointments.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-12 text-text-secondary border border-dashed border-grafite-border rounded-lg bg-grafite-surface/30">
-                  <Calendar size={48} className="mb-4 opacity-20" />
-                  <p className="italic">Nenhum agendamento para hoje.</p>
-                  <button onClick={() => setActiveTab('booking')} className="mt-4 text-gold-main hover:underline text-sm">
-                    Adicionar manualmente
-                  </button>
-                </div>
-              )}
-              
+              {todayAppointments.length === 0 && <div className="py-12 text-center text-text-secondary border border-dashed border-grafite-border rounded bg-grafite-surface/30"><p className="italic">Agenda vazia hoje.</p><button onClick={() => setActiveTab('booking')} className="mt-4 text-gold-main hover:underline text-sm">Adicionar manualmente</button></div>}
               {todayAppointments.map(app => (
-                <div 
-                  key={app.id} 
-                  className={`
-                    relative p-4 md:p-5 rounded-lg border transition-all duration-300 hover:shadow-lg flex flex-col md:flex-row gap-4 md:items-center
-                    ${app.status === 'checked_in' 
-                      ? 'bg-green-950/10 border-green-500/30' 
-                      : 'bg-grafite-main border-grafite-border'}
-                  `}
-                >
+                <div key={app.id} className={`relative p-4 rounded-lg border flex flex-col md:flex-row gap-4 md:items-center ${app.status === 'checked_in' ? 'bg-green-950/10 border-green-500/30' : 'bg-grafite-main border-grafite-border'}`}>
                   <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${app.status === 'checked_in' ? 'bg-green-500' : 'bg-blue-500'}`}></div>
-
                   <div className="flex-1 pl-3">
                     <div className="flex items-center gap-3 mb-1">
-                        <span className="text-xl font-mono font-bold text-text-primary">
-                            {app.startTime && app.startTime.toDate().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}
-                        </span>
-                        <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${
-                            app.status === 'checked_in' 
-                            ? 'bg-green-500/10 border-green-500/50 text-green-400' 
-                            : 'bg-blue-500/10 border-blue-500/50 text-blue-400'
-                        }`}>
-                            {app.status === 'checked_in' ? 'Em Atendimento' : 'Agendado'}
-                        </div>
+                        <span className="text-xl font-mono font-bold text-text-primary">{app.startTime?.toDate().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded border uppercase ${app.status === 'checked_in' ? 'border-green-500 text-green-400' : 'border-blue-500 text-blue-400'}`}>{app.status === 'checked_in' ? 'Em Andamento' : 'Agendado'}</span>
                     </div>
                     <h4 className="text-lg font-bold text-white flex items-center gap-2">
                         {app.clientName}
-                        {app.clientNameManual && <span className="text-xs font-normal text-text-secondary bg-grafite-surface px-1 rounded">Avulso</span>}
+                        {app.clientNameManual && <span className="text-[10px] bg-grafite-surface px-1 rounded text-text-secondary">Avulso</span>}
                     </h4>
-                    <p className="text-sm text-gold-main flex items-center gap-1 mt-1">
-                        <Scissors size={14}/> {app.serviceName}
-                    </p>
+                    <div className="text-sm text-gold-main flex flex-wrap gap-2 mt-1">
+                        <span className="flex items-center gap-1"><Scissors size={14}/> {app.serviceName}</span>
+                        {app.productsCount > 0 && <span className="flex items-center gap-1 text-text-primary"><Package size={14}/> +{app.productsCount} itens</span>}
+                        <span className="text-text-secondary ml-auto font-bold">Total: R$ {(app.totalPrice || 0).toFixed(2)}</span>
+                    </div>
                   </div>
-
-                  <div className="flex gap-2 pl-3 md:pl-0 w-full md:w-auto">
-                    {app.status === 'confirmed' && (
-                      <button 
-                        onClick={() => handleCheckIn(app.id)}
-                        className="flex-1 md:flex-none bg-blue-600 hover:bg-blue-500 text-white py-2 px-4 rounded text-sm font-medium transition-colors flex items-center justify-center gap-2"
-                      >
-                        <User size={16}/> Check-in
-                      </button>
-                    )}
-                    
-                    {app.status === 'checked_in' && (
-                      <button 
-                        onClick={() => handleCompleteService(app.id)}
-                        className="flex-1 md:flex-none bg-green-600 hover:bg-green-500 text-white py-2 px-4 rounded text-sm font-medium transition-colors flex items-center justify-center gap-2"
-                      >
-                        <CheckCircle size={16}/> Concluir
-                      </button>
-                    )}
-
-                    <button 
-                      onClick={() => handleCancelService(app.id)}
-                      className="px-3 py-2 rounded border border-red-900/50 text-red-400 hover:bg-red-900/20 text-sm font-medium transition-colors"
-                      title="Cancelar"
-                    >
-                      <XCircle size={18}/>
-                    </button>
+                  <div className="flex gap-2 pl-3 w-full md:w-auto">
+                     {/* Botão WhatsApp (Novo) */}
+                     {app.status === 'confirmed' && app.clientPhone && (
+                        <button 
+                            onClick={() => handleSendWhatsapp(app)}
+                            className="w-10 h-10 rounded-full bg-green-600/20 text-green-500 flex items-center justify-center hover:bg-green-600 hover:text-white transition-colors"
+                            title="WhatsApp"
+                        >
+                            <MessageCircle size={20} />
+                        </button>
+                     )}
+                    {app.status === 'confirmed' && <button onClick={() => handleCheckIn(app.id)} className="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-2 px-4 rounded text-sm flex items-center justify-center gap-2"><User size={16}/> Check-in</button>}
+                    {app.status === 'checked_in' && <button onClick={() => handleCompleteService(app.id)} className="flex-1 bg-green-600 hover:bg-green-500 text-white py-2 px-4 rounded text-sm flex items-center justify-center gap-2"><CheckCircle size={16}/> Concluir</button>}
+                    <button onClick={() => handleCancelService(app.id)} className="px-3 py-2 rounded border border-red-900/50 text-red-400 hover:bg-red-900/20"><XCircle size={18}/></button>
                   </div>
                 </div>
               ))}
             </div>
-          )}
+         )}
       </section>
   );
 
-  // 2. Novo Agendamento Section
-  const renderBookingManual = () => (
-       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <section className="card-premium">
-              <div className="border-b border-grafite-border pb-4 mb-6 flex items-center gap-2">
+  // 2. Novo Agendamento
+  const renderBookingManual = () => {
+      const selectedSvc = allServices.find(s => s.id === manualServiceId);
+      const currentServicePrice = selectedSvc ? Number(selectedSvc.price) : 0;
+      const productsTotal = manualCart.reduce((acc, item) => acc + (item.price * item.qty), 0);
+      const manualTotal = currentServicePrice + productsTotal;
+
+      return (
+       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <section className="lg:col-span-7 card-premium space-y-5">
+              <div className="border-b border-grafite-border pb-4 flex items-center gap-2">
                   <UserPlus className="text-gold-main" size={20}/>
-                  <h3 className="text-xl font-heading font-semibold text-text-primary">Agendar Cliente Avulso</h3>
+                  <h3 className="text-xl font-bold text-text-primary">Dados do Agendamento</h3>
               </div>
-              <p className="text-text-secondary text-sm mb-6">Use esta opção para clientes balcão.</p>
+              <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1"><label htmlFor="manual_client_name" className="text-xs text-text-secondary ml-1">Nome do Cliente</label><input id="manual_client_name" type="text" value={manualClientName} onChange={(e) => setManualClientName(e.target.value)} className="input-premium" placeholder="Ex: João Silva" required/></div>
+                  <div className="space-y-1"><label htmlFor="manual_client_phone" className="text-xs text-text-secondary ml-1">WhatsApp / Telefone</label><input id="manual_client_phone" type="tel" value={manualClientPhone} onChange={(e) => setManualClientPhone(e.target.value)} className="input-premium" placeholder="21 99999-9999"/></div>
+              </div>
 
-              <form onSubmit={handleManualBooking} className="space-y-5">
-                  <div className="space-y-1">
-                      <label className="text-xs font-medium text-text-secondary ml-1">Nome do Cliente</label>
-                      <input 
-                          type="text" 
-                          value={manualClientName} onChange={(e) => setManualClientName(e.target.value)}
-                          className="input-premium"
-                          placeholder="Ex: João Silva"
-                          required
-                      />
-                  </div>
-
-                  <div className="space-y-1">
-                      <label className="text-xs font-medium text-text-secondary ml-1">Serviço</label>
-                      <select 
-                          value={manualServiceId} onChange={(e) => setManualServiceId(e.target.value)}
-                          className="input-premium"
-                          required
-                      >
-                          {allServices.map(s => (
-                              <option key={s.id} value={s.id}>{s.name} - R$ {s.price} ({s.duration} min)</option>
+              <div className="space-y-1"><label htmlFor="manual_service" className="text-xs text-text-secondary ml-1">Serviço Principal</label><select id="manual_service" value={manualServiceId} onChange={(e) => setManualServiceId(e.target.value)} className="input-premium" required>{allServices.map(s => <option key={s.id} value={s.id}>{s.name} - R$ {s.price}</option>)}</select></div>
+              <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1"><label htmlFor="manual_date" className="text-xs text-text-secondary ml-1">Data</label><input id="manual_date" type="date" value={manualDate} onChange={(e) => setManualDate(e.target.value)} className="input-premium" required/></div>
+                  <div className="space-y-1"><label htmlFor="manual_time" className="text-xs text-text-secondary ml-1">Horário</label><input id="manual_time" type="time" value={manualTime} onChange={(e) => setManualTime(e.target.value)} className="input-premium" required/></div>
+              </div>
+              <div className="pt-4 border-t border-grafite-border">
+                  <h4 className="text-sm font-bold text-white mb-3 flex items-center gap-2"><Package size={16} className="text-gold-main"/> Adicionar Produtos</h4>
+                  {products.length === 0 ? <p className="text-xs text-text-secondary italic">Sem produtos cadastrados.</p> : (
+                      <div className="grid grid-cols-2 gap-3 max-h-40 overflow-y-auto custom-scrollbar">
+                          {products.map(p => (
+                              <div key={p.id} className="bg-grafite-main border border-grafite-border p-2 rounded flex justify-between items-center">
+                                  <div className="truncate pr-2"><p className="text-xs font-bold text-text-primary truncate">{p.name}</p><p className="text-[10px] text-gold-main">R$ {p.price}</p></div>
+                                  <button onClick={() => handleUpdateManualCart(p, 'add')} className="text-gold-main hover:text-white bg-gold-dim p-1 rounded hover:bg-gold-main transition-colors"><Plus size={14}/></button>
+                              </div>
                           ))}
-                      </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1">
-                          <label className="text-xs font-medium text-text-secondary ml-1">Data</label>
-                          <input 
-                              type="date" 
-                              value={manualDate} onChange={(e) => setManualDate(e.target.value)}
-                              className="input-premium"
-                              required
-                          />
                       </div>
-                      <div className="space-y-1">
-                          <label className="text-xs font-medium text-text-secondary ml-1">Horário</label>
-                          <input 
-                              type="time" 
-                              value={manualTime} onChange={(e) => setManualTime(e.target.value)}
-                              className="input-premium"
-                              required
-                          />
-                      </div>
-                  </div>
-
-                  <button 
-                      type="submit" 
-                      disabled={isBookingManual} 
-                      className="btn-primary w-full h-12 mt-4 flex items-center justify-center gap-2"
-                  >
-                      {isBookingManual ? <div className="animate-spin rounded-full h-5 w-5 border-2 border-current border-t-transparent"/> : <><Plus size={18}/> Confirmar Agendamento</>}
-                  </button>
-              </form>
+                  )}
+              </div>
           </section>
-
-          <div className="card-premium flex flex-col justify-center items-center text-center p-8 bg-grafite-surface/30 border-dashed">
-              <Zap size={48} className="text-gold-main mb-4 opacity-50"/>
-              <h4 className="text-lg font-bold text-text-primary mb-2">Agenda Unificada</h4>
-              <p className="text-text-secondary text-sm max-w-xs">
-                  Agendamentos manuais atualizam automaticamente o sistema e o painel do cliente, prevenindo overbooking.
-              </p>
-          </div>
+          <section className="lg:col-span-5 space-y-6">
+              <div className="card-premium bg-grafite-surface/30">
+                  <h3 className="text-lg font-bold text-text-primary mb-4 border-b border-grafite-border pb-2">Resumo da Venda</h3>
+                  <div className="space-y-2 text-sm">
+                      <div className="flex justify-between text-white"><span>{selectedSvc?.name || 'Serviço'}</span><span>R$ {currentServicePrice.toFixed(2)}</span></div>
+                      {manualCart.map(item => (
+                          <div key={item.productId} className="flex justify-between text-text-secondary"><div className="flex items-center gap-2"><button onClick={() => handleUpdateManualCart(item, 'remove')} className="text-red-400 hover:text-red-300"><Minus size={12}/></button><span>{item.qty}x {item.name}</span></div><span>R$ {(item.price * item.qty).toFixed(2)}</span></div>
+                      ))}
+                  </div>
+                  <div className="mt-4 pt-4 border-t border-grafite-border flex justify-between items-center"><span className="text-text-secondary uppercase text-xs">Total a Receber</span><span className="text-2xl font-bold text-gold-main">R$ {manualTotal.toFixed(2)}</span></div>
+                  <button onClick={handleManualBooking} disabled={isBookingManual} className="btn-primary w-full h-12 mt-6 flex items-center justify-center gap-2 shadow-glow">{isBookingManual ? <div className="animate-spin h-5 w-5 border-2 border-current rounded-full"/> : <><CheckCircle size={18}/> Confirmar Venda</>}</button>
+              </div>
+          </section>
        </div>
-  );
+      );
+  };
 
-  // 3. Configurações Section (Horários, Serviços, Bloqueios)
-  const renderConfigSection = () => (
+  // 3. Configurações
+  const renderConfig = () => (
      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Horários */}
-        <section className="card-premium lg:col-span-1">
-            <div className="border-b border-grafite-border pb-4 mb-4 flex items-center gap-2">
-              <Clock className="text-gold-main" size={20}/>
-              <h3 className="text-xl font-heading font-semibold text-text-primary">Horários de Trabalho</h3>
-            </div>
-            
-            {isLoadingHours ? <LoadingSpinner /> : (
-              <div className="space-y-3">
-                {workingHours.map((day) => (
-                  <div key={day.id} className="flex flex-wrap items-center justify-between gap-2 py-1 border-b border-grafite-border/50 last:border-0">
-                    <div className="flex items-center gap-3 min-w-[120px]">
-                      <input 
-                        type="checkbox"
-                        id={`check-${day.id}`}
-                        checked={day.isWorking}
-                        onChange={(e) => setWorkingHours(wh => wh.map(d => d.id === day.id ? {...d, isWorking: e.target.checked} : d))}
-                        className="w-4 h-4 rounded border-grafite-border bg-grafite-main text-gold-main focus:ring-gold-main/50 accent-gold-main"
-                      />
-                      <label htmlFor={`check-${day.id}`} className={`text-sm font-medium ${day.isWorking ? 'text-text-primary' : 'text-text-secondary/50'}`}>
-                        {day.day}
-                      </label>
+        <section className="card-premium">
+            <div className="flex items-center gap-2 mb-4 border-b border-grafite-border pb-2"><Clock className="text-gold-main"/><h3 className="font-bold">Horários</h3></div>
+            {isLoadingHours ? <Loading/> : workingHours.map(d => (
+                <div key={d.id} className="flex justify-between text-sm py-1 border-b border-grafite-border/30">
+                    <div className="flex gap-2">
+                        <input type="checkbox" id={`work_check_${d.id}`} checked={d.isWorking} onChange={e => setWorkingHours(prev => prev.map(x => x.id === d.id ? {...x, isWorking: e.target.checked} : x))} className="accent-gold-main"/> 
+                        <label htmlFor={`work_check_${d.id}`}>{d.day}</label>
                     </div>
-                    
-                    {day.isWorking ? (
-                      <div className="flex items-center gap-2">
-                        <input 
-                          type="time"
-                          value={day.startTime}
-                          onChange={(e) => setWorkingHours(wh => wh.map(d => d.id === day.id ? {...d, startTime: e.target.value} : d))}
-                          className="bg-grafite-main border border-grafite-border rounded px-2 py-1 text-sm text-text-primary focus:border-gold-main outline-none"
-                        />
-                        <span className="text-text-secondary">-</span>
-                        <input 
-                          type="time"
-                          value={day.endTime}
-                          onChange={(e) => setWorkingHours(wh => wh.map(d => d.id === day.id ? {...d, endTime: e.target.value} : d))}
-                          className="bg-grafite-main border border-grafite-border rounded px-2 py-1 text-sm text-text-primary focus:border-gold-main outline-none"
-                        />
-                      </div>
-                    ) : (
-                      <span className="text-xs text-text-secondary uppercase tracking-wider">Fechado</span>
-                    )}
-                  </div>
-                ))}
-                <div className="pt-4">
-                  <button onClick={handleSaveAllHours} disabled={isLoadingHours} className="btn-primary w-full">
-                    {isLoadingHours ? 'Salvando...' : 'Salvar Horários'}
-                  </button>
-                </div>
-              </div>
-            )}
-        </section>
-
-        {/* Serviços */}
-        <section className="card-premium lg:col-span-1">
-            <div className="border-b border-grafite-border pb-4 mb-4 flex items-center gap-2">
-              <Scissors className="text-gold-main" size={20}/>
-              <h3 className="text-xl font-heading font-semibold text-text-primary">Meus Serviços</h3>
-            </div>
-            <p className="text-sm text-text-secondary mb-4">Selecione quais serviços da loja você realiza:</p>
-            
-            {isLoadingServices ? <LoadingSpinner /> : (
-              <div className="space-y-4">
-                {allServices.length === 0 ? (
-                  <p className="text-text-secondary">Nenhum serviço disponível na loja.</p>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {allServices.map(service => (
-                      <label 
-                        key={service.id} 
-                        className={`
-                          flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all
-                          ${myServiceIds.has(service.id) 
-                            ? 'bg-gold-dim border-gold-main/50' 
-                            : 'bg-grafite-main border-grafite-border hover:bg-grafite-surface'}
-                        `}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={myServiceIds.has(service.id)}
-                          onChange={() => handleServiceToggle(service.id)}
-                          className="w-4 h-4 rounded border-grafite-border bg-grafite-main accent-gold-main"
-                        />
-                        <div className="flex flex-col">
-                          <span className={`text-sm font-medium ${myServiceIds.has(service.id) ? 'text-gold-main' : 'text-text-primary'}`}>
-                            {service.name}
-                          </span>
-                          <span className="text-xs text-text-secondary">R$ {service.price.toFixed(2)}</span>
+                    {d.isWorking ? (
+                        <div className="flex gap-2">
+                            <input type="time" id={`start_time_${d.id}`} value={d.startTime} onChange={e => setWorkingHours(prev => prev.map(x => x.id === d.id ? {...x, startTime: e.target.value} : x))} className="bg-transparent text-white"/>
+                            <input type="time" id={`end_time_${d.id}`} value={d.endTime} onChange={e => setWorkingHours(prev => prev.map(x => x.id === d.id ? {...x, endTime: e.target.value} : x))} className="bg-transparent text-white"/>
                         </div>
-                      </label>
-                    ))}
-                  </div>
-                )}
-                <button onClick={handleSaveMyServices} disabled={isLoadingServices} className="btn-primary w-full">
-                  Atualizar Meus Serviços
-                </button>
-              </div>
-            )}
+                    ) : <span className="text-text-secondary">Fechado</span>}
+                </div>
+            ))}
+            <button onClick={handleSaveAllHours} className="btn-primary w-full mt-4 h-10">Salvar Horários</button>
         </section>
-        
-        {/* Bloqueios */}
+        <section className="card-premium">
+            <div className="flex items-center gap-2 mb-4 border-b border-grafite-border pb-2"><Scissors className="text-gold-main"/><h3 className="font-bold">Meus Serviços</h3></div>
+            {isLoadingServices ? <Loading/> : <div className="grid grid-cols-2 gap-2">{allServices.map(s => (
+                <label key={s.id} htmlFor={`svc_${s.id}`} className={`p-2 rounded border cursor-pointer text-sm flex items-center gap-2 ${myServiceIds.has(s.id) ? 'border-gold-main bg-gold-dim text-white' : 'border-grafite-border text-text-secondary'}`}>
+                    <input type="checkbox" id={`svc_${s.id}`} className="hidden" checked={myServiceIds.has(s.id)} onChange={() => handleServiceToggle(s.id)}/>{s.name}
+                </label>
+            ))}</div>}
+            <button onClick={handleSaveMyServices} className="btn-primary w-full mt-4 h-10">Salvar Serviços</button>
+        </section>
         <section className="card-premium lg:col-span-2">
-            <div className="border-b border-grafite-border pb-4 mb-4 flex items-center gap-2">
-              <Ban className="text-red-400" size={20}/>
-              <h3 className="text-xl font-heading font-semibold text-text-primary">Bloqueios de Agenda</h3>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* Form de Bloqueio */}
-                <div className="md:col-span-1">
-                    <form onSubmit={handleAddBlock} className="space-y-4 bg-grafite-surface p-4 rounded-lg border border-grafite-border">
-                      <div className="space-y-1">
-                         <label className="text-xs font-medium text-text-secondary">Motivo</label>
-                         <input 
-                          type="text" 
-                          value={blockReason} onChange={(e) => setBlockReason(e.target.value)}
-                          className="input-premium text-sm py-2"
-                          placeholder="Ex: Almoço, Médico..."
-                          required
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                          <label className="text-xs font-medium text-text-secondary">Tipo</label>
-                          <select 
-                            value={blockType} onChange={(e) => setBlockType(e.target.value)}
-                            className="input-premium text-sm py-2"
-                          >
-                            <option value="recurring">Recorrente (Semanal)</option>
-                            <option value="single">Data Específica</option>
-                          </select>
-                      </div>
-
-                      <div className="space-y-1">
-                         <label className="text-xs font-medium text-text-secondary">
-                           {blockType === 'recurring' ? 'Dia da Semana' : 'Data'}
-                         </label>
-                         {blockType === 'recurring' ? (
-                            <select value={blockDay} onChange={(e) => setBlockDay(e.target.value)} className="input-premium text-sm py-2">
-                              {daysOfWeek.map(day => <option key={day.key} value={day.key}>{day.label}</option>)}
-                            </select>
-                         ) : (
-                            <input 
-                              type="date" 
-                              value={blockDate} onChange={(e) => setBlockDate(e.target.value)}
-                              min={new Date().toISOString().split('T')[0]}
-                              className="input-premium text-sm py-2" required
-                            />
-                         )}
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                         <div className="space-y-1">
-                            <label className="text-xs font-medium text-text-secondary">Início</label>
-                            <input type="time" value={blockStartTime} onChange={(e) => setBlockStartTime(e.target.value)} className="input-premium text-sm py-2" required />
-                         </div>
-                         <div className="space-y-1">
-                            <label className="text-xs font-medium text-text-secondary">Fim</label>
-                            <input type="time" value={blockEndTime} onChange={(e) => setBlockEndTime(e.target.value)} className="input-premium text-sm py-2" required />
-                         </div>
-                      </div>
-
-                      <button type="submit" disabled={isLoadingBlocks} className="w-full py-2 rounded bg-grafite-main border border-gold-main text-gold-main font-medium hover:bg-gold-main hover:text-grafite-main transition-all text-sm">
-                        + Adicionar Bloqueio
-                      </button>
-                    </form>
-                </div>
-
-                {/* Lista de Bloqueios */}
-                <div className="md:col-span-2">
-                    <h4 className="text-sm font-semibold text-text-primary uppercase tracking-wider mb-3">Bloqueios Ativos</h4>
-                    {isLoadingBlocks ? <LoadingSpinner /> : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                        {blockedTimes.length === 0 && <p className="text-text-secondary text-sm col-span-2 italic">Nenhum bloqueio cadastrado.</p>}
-                        {blockedTimes.map(block => (
-                          <div key={block.id} className="bg-grafite-main border border-grafite-border p-3 rounded text-sm flex justify-between items-center group hover:border-red-900/50 transition-colors">
-                            <div>
-                              <strong className="block text-text-primary">{block.reason}</strong>
-                              <span className="text-text-secondary text-xs">
-                                {block.type === 'recurring' 
-                                  ? daysOfWeek.find(d => d.key === block.dayOfWeek)?.label 
-                                  : new Date(block.date.seconds * 1000).toLocaleDateString('pt-BR', {timeZone: 'UTC'})}
-                              </span>
-                              <span className="block text-text-secondary text-xs">{block.startTime} - {block.endTime}</span>
-                            </div>
-                            <button 
-                              onClick={() => handleDeleteBlock(block.id)}
-                              className="text-text-secondary hover:text-red-400 p-1 rounded transition-colors"
-                              title="Remover"
-                            >
-                              <XCircle size={16}/>
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                </div>
-            </div>
+             <div className="flex items-center gap-2 mb-4 border-b border-grafite-border pb-2"><Ban className="text-red-400"/><h3 className="font-bold">Bloqueios</h3></div>
+             <form onSubmit={handleAddBlock} className="flex gap-2 mb-4">
+                 <input id="block_reason" placeholder="Motivo" value={blockReason} onChange={e=>setBlockReason(e.target.value)} className="input-premium flex-1"/>
+                 <input id="block_start" type="time" value={blockStartTime} onChange={e=>setBlockStartTime(e.target.value)} className="input-premium w-24"/>
+                 <input id="block_end" type="time" value={blockEndTime} onChange={e=>setBlockEndTime(e.target.value)} className="input-premium w-24"/>
+                 <button className="btn-primary px-4">+</button>
+             </form>
+             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">{blockedTimes.map(b => <div key={b.id} className="p-2 border border-red-900/50 bg-red-950/10 rounded text-xs flex justify-between"><span>{b.reason} ({b.startTime}-{b.endTime})</span><button onClick={()=>handleDeleteBlock(b.id)} className="text-red-400">x</button></div>)}</div>
         </section>
      </div>
   );
 
-  // 4. Performance Section
-  const renderPerformanceReport = () => (
+  // 4. Performance
+  const renderPerformance = () => (
       <section className="card-premium">
-          <div className="border-b border-grafite-border pb-4 mb-6 flex items-center gap-2">
-              <ClipboardCheck className="text-gold-main" size={20}/>
-              <h3 className="text-xl font-heading font-semibold text-text-primary">Minha Performance (Mês Atual)</h3>
-          </div>
-          
-          {isLoadingPerformance ? <LoadingSpinner /> : (
+          <div className="flex items-center gap-2 border-b border-grafite-border pb-4 mb-6"><ClipboardCheck className="text-gold-main"/><h3 className="text-xl font-bold text-text-primary">Performance (Mês)</h3></div>
+          {isLoadingPerformance ? <Loading/> : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                
-                {/* Card Serviços Concluídos */}
-                <div className="bg-grafite-surface border border-grafite-border p-5 rounded-xl border-l-4 border-blue-500/70">
-                    <p className="text-sm font-medium text-text-secondary uppercase mb-2">Serviços Concluídos</p>
-                    <p className="text-3xl font-heading font-bold text-white">{performanceData.servicesCompleted}</p>
-                    <p className="text-xs text-text-secondary mt-2">Em {new Date().toLocaleString('pt-BR', {month: 'long', year: 'numeric'})}</p>
-                </div>
-
-                {/* Card Receita Bruta */}
-                <div className="bg-grafite-surface border border-grafite-border p-5 rounded-xl border-l-4 border-green-500/70">
-                    <p className="text-sm font-medium text-text-secondary uppercase mb-2">Receita Total Gerada</p>
-                    <p className="text-3xl font-heading font-bold text-white">R$ {performanceData.totalRevenue.toFixed(2).replace('.', ',')}</p>
-                    <p className="text-xs text-text-secondary mt-2">Valor total dos serviços</p>
-                </div>
-
-                {/* Card Comissão Estimada */}
-                <div className="bg-grafite-surface border border-grafite-border p-5 rounded-xl border-l-4 border-gold-main/70">
-                    <p className="text-sm font-medium text-text-secondary uppercase mb-2">Sua Comissão Estimada</p>
-                    <p className="text-3xl font-heading font-bold text-gold-main">R$ {performanceData.totalCommission.toFixed(2).replace('.', ',')}</p>
-                    <p className="text-xs text-text-secondary mt-2">Taxa de {SERVICE_COMMISSION_RATE * 100}% [Placeholder]</p>
-                </div>
+                <div className="p-5 rounded-xl border border-blue-500/50 bg-blue-950/10"><p className="text-xs uppercase text-text-secondary">Serviços</p><p className="text-3xl font-bold text-white">{performanceData.servicesCompleted}</p></div>
+                <div className="p-5 rounded-xl border border-green-500/50 bg-green-950/10"><p className="text-xs uppercase text-text-secondary">Receita Total</p><p className="text-3xl font-bold text-white">R$ {performanceData.totalRevenue.toFixed(2)}</p></div>
+                <div className="p-5 rounded-xl border border-gold-main/50 bg-gold-dim/10"><p className="text-xs uppercase text-text-secondary">Comissão (Est.)</p><p className="text-3xl font-bold text-gold-main">R$ {performanceData.totalCommission.toFixed(2)}</p></div>
             </div>
           )}
-
-          <div className="p-4 bg-grafite-main border border-grafite-border rounded-lg mt-6">
-              <p className="text-xs text-text-secondary italic">
-                  * Nota: A comissão real pode variar dependendo das políticas da barbearia. Este valor é uma estimativa com base em **{SERVICE_COMMISSION_RATE * 100}%** dos serviços concluídos no mês atual.
-              </p>
-          </div>
-
       </section>
   );
 
-
-  // --- RENDERIZAÇÃO PRINCIPAL DO PAINEL PROFISSIONAL ---
   return (
     <div className="max-w-7xl mx-auto p-4 space-y-6 animate-fade-in">
-      
       <h2 className="text-3xl font-heading font-bold text-gold-main mb-6">Painel do Profissional</h2>
-      
-      {/* --- Navegação por Abas --- */}
-      <div className="flex p-1 bg-grafite-card border border-grafite-border rounded-xl mb-8 overflow-x-auto">
+      <div className="flex p-1 bg-grafite-card border border-grafite-border rounded-xl mb-8 overflow-x-auto gap-1">
         {[{id: 'agenda', label: 'Agenda', Icon: Calendar}, {id: 'booking', label: 'Novo Agendamento', Icon: UserPlus}, {id: 'performance', label: 'Performance', Icon: TrendingUp}, {id: 'config', label: 'Configurações', Icon: Clock}].map(({id, label, Icon}) => (
-            <button 
-                key={id}
-                onClick={() => setActiveTab(id)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-300
-                    ${activeTab === id ? 'bg-gold-main text-grafite-main shadow-glow' : 'text-text-secondary hover:text-text-primary'}`
-                }
-            >
-                <Icon size={18} />
-                {label}
+            <button key={id} onClick={() => setActiveTab(id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${activeTab === id ? 'bg-gold-main text-grafite-main shadow-glow' : 'text-text-secondary hover:text-text-primary'}`}>
+                <Icon size={18} /> {label}
             </button>
         ))}
       </div>
-
-      {/* --- Conteúdo das Abas --- */}
       <div className="min-h-[500px]">
           {activeTab === 'agenda' && renderAgenda()}
           {activeTab === 'booking' && renderBookingManual()}
-          {activeTab === 'config' && renderConfigSection()}
-          {activeTab === 'performance' && renderPerformanceReport()}
+          {activeTab === 'config' && renderConfig()}
+          {activeTab === 'performance' && renderPerformance()}
       </div>
     </div>
   );

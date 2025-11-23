@@ -1,5 +1,5 @@
 // src/components/AdminPanel/AdminPanel.jsx
-// (COMPLETO - Com Tabs de Navegação, Dashboard e Estilo Premium Dark)
+// (COMPLETO - Dashboard, Vendas, Produtos, Whitelabel e Correções de Acessibilidade)
 
 import { useState, useEffect, useCallback } from 'react';
 import { db } from '../../firebase/firebase-config';
@@ -7,14 +7,14 @@ import {
   addDoc, collection, getDocs, doc, 
   updateDoc, deleteDoc,
   query, where, onSnapshot, Timestamp,
-  getDoc, writeBatch, deleteField,
-  setDoc
+  getDoc, writeBatch, deleteField, orderBy
 } from "firebase/firestore"; 
 import { useShop } from '../../App.jsx';
 import { toast } from 'sonner';
 import { 
     Store, User, Clock, Scissors, UserPlus, FileText, Upload, 
-    LayoutDashboard, DollarSign, Zap, TrendingDown, Users, CheckCircle
+    LayoutDashboard, DollarSign, Zap, TrendingDown, Users,
+    CheckCircle, Package, ShoppingBag, Trash2, Plus, Palette, Link as LinkIcon, ListChecks, ArrowLeft
 } from 'lucide-react';
 
 // --- Função Helper do Cloudinary ---
@@ -35,46 +35,58 @@ const uploadImageToCloudinary = async (file) => {
   }
 };
 
-function AdminPanel() {
-  const { managedShopId } = useShop();
+function AdminPanel({ forcedShopId, onBack }) {
+  const { managedShopId: contextShopId } = useShop();
+  const managedShopId = forcedShopId || contextShopId;
 
-  // --- Estados de Navegação e Carregamento ---
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'config', 'services', 'team'
+  // --- Estados de Navegação ---
+  const [activeTab, setActiveTab] = useState('dashboard');
+  
+  // --- Loadings ---
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [isLoadingServices, setIsLoadingServices] = useState(false);
   const [isLoadingPros, setIsLoadingPros] = useState(false);
   const [isLoadingDashboard, setIsLoadingDashboard] = useState(true);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
+  const [isLoadingSales, setIsLoadingSales] = useState(false);
 
-  // --- Estados de Dados ---
+  // --- Dados ---
   const [shopProfile, setShopProfile] = useState(null);
   const [services, setServices] = useState([]);
   const [professionals, setProfessionals] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [salesHistory, setSalesHistory] = useState([]); 
   const [dashboardData, setDashboardData] = useState({
-      totalAppointments: 0,
-      completedAppointments: 0,
-      cancelledAppointments: 0,
-      totalRevenue: 0,
-      cancellationRate: 0
+      totalAppointments: 0, completedAppointments: 0, 
+      cancelledAppointments: 0, totalRevenue: 0, cancellationRate: 0
   });
 
-  // --- Estados de Formulários e Uploads ---
+  // --- Formulários ---
   const [newLogoFile, setNewLogoFile] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
+  
   const [serviceName, setServiceName] = useState('');
   const [servicePrice, setServicePrice] = useState('');
   const [serviceDuration, setServiceDuration] = useState('');
+  
   const [inviteName, setInviteName] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [isLoadingInvite, setIsLoadingInvite] = useState(false);
+  
   const [mpAccessToken, setMpAccessToken] = useState('');
   const [isSavingKeys, setIsSavingKeys] = useState(false);
 
+  const [productName, setProductName] = useState('');
+  const [productPrice, setProductPrice] = useState('');
+  const [productStock, setProductStock] = useState('');
+  const [productImageFile, setProductImageFile] = useState(null);
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
 
-  // --- FUNÇÃO: DASHBOARD (Nova Lógica) ---
+
+  // --- 1. DASHBOARD ---
   const fetchDashboardData = useCallback(async () => {
     if (!managedShopId) return;
     setIsLoadingDashboard(true);
-    
     try {
         const now = new Date();
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -88,162 +100,158 @@ function AdminPanel() {
         );
 
         const snapshot = await getDocs(appointmentsQuery);
-        
         let totalAppointments = 0;
         let completedAppointments = 0;
         let cancelledAppointments = 0;
         let totalRevenue = 0;
 
-        // Requisição em lote para buscar preços dos serviços
-        const batchServiceFetches = snapshot.docs.map(async (docSnap) => {
+        snapshot.forEach(docSnap => {
             const appData = docSnap.data();
             totalAppointments++;
-
-            let servicePrice = 0;
-            // Busca o preço do serviço
-            const serviceDoc = await getDoc(doc(db, "services", appData.serviceId));
-            if (serviceDoc.exists()) {
-                servicePrice = serviceDoc.data().price || 0;
-            }
-
+            
             if (appData.status === 'completed') {
                 completedAppointments++;
-                totalRevenue += servicePrice;
+                totalRevenue += appData.totalPrice || 0; 
             } else if (appData.status && appData.status.includes('cancelled')) {
                 cancelledAppointments++;
             }
         });
-
-        // Espera todos os cálculos de preço/receita terminarem
-        await Promise.all(batchServiceFetches);
         
         const cancellationRate = totalAppointments > 0 
             ? ((cancelledAppointments / totalAppointments) * 100).toFixed(1) 
             : 0;
 
-        setDashboardData({
-            totalAppointments,
-            completedAppointments,
-            cancelledAppointments,
-            totalRevenue,
-            cancellationRate
-        });
+        setDashboardData({ totalAppointments, completedAppointments, cancelledAppointments, totalRevenue, cancellationRate });
 
     } catch (error) {
-        console.error("Erro ao buscar dados do Dashboard:", error);
-        toast.error("Erro ao carregar dados do Dashboard.");
+        console.error("Erro Dashboard:", error);
     } finally {
         setIsLoadingDashboard(false);
     }
   }, [managedShopId]);
 
+  // --- 2. VENDAS ---
+  const fetchSalesHistory = useCallback(async () => {
+      if (!managedShopId) return;
+      setIsLoadingSales(true);
+      try {
+          let q;
+          try {
+             q = query(
+                collection(db, "appointments"), 
+                where("barbershopId", "==", managedShopId),
+                orderBy("createdAt", "desc")
+             );
+          } catch (e) {
+             // Fallback caso o índice não exista
+             q = query(collection(db, "appointments"), where("barbershopId", "==", managedShopId));
+          }
+          
+          const querySnapshot = await getDocs(q);
+          const sales = querySnapshot.docs
+            .map(doc => ({ id: doc.id, ...doc.data() }))
+            .filter(app => (app.orderItems && app.orderItems.length > 0) || app.totalPrice > 0);
+            
+          setSalesHistory(sales);
+      } catch (error) {
+          console.error("Erro ao buscar vendas:", error);
+          toast.error("Erro ao carregar histórico de vendas.");
+      } finally {
+          setIsLoadingSales(false);
+      }
+  }, [managedShopId]);
 
-  // --- LÓGICA DE CARREGAMENTO DE DADOS GERAIS (EXISTENTE) ---
-
-  // 1. Busca os dados da loja
+  // --- FETCHERS GERAIS ---
   const fetchShopProfile = useCallback(async () => {
     if (!managedShopId) return;
     setIsLoadingProfile(true);
     try {
-      const shopDocRef = doc(db, "barbershops", managedShopId);
-      const docSnap = await getDoc(shopDocRef);
-      if (docSnap.exists()) {
-        setShopProfile(docSnap.data());
-      }
-    } catch (error) { 
-      console.error("Erro ao buscar perfil da loja: ", error); 
-    } finally { 
-      setIsLoadingProfile(false); 
-    }
+      const docSnap = await getDoc(doc(db, "barbershops", managedShopId));
+      if (docSnap.exists()) setShopProfile(docSnap.data());
+    } catch (error) { console.error("Erro perfil:", error); } 
+    finally { setIsLoadingProfile(false); }
   }, [managedShopId]);
 
-  // 2. Busca os serviços
   const fetchServices = useCallback(async () => {
     if (!managedShopId) return; 
     setIsLoadingServices(true);
     try {
-      const servicesQuery = query(
-        collection(db, "services"),
-        where("barbershopId", "==", managedShopId)
-      );
-      const querySnapshot = await getDocs(servicesQuery);
-      const servicesList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setServices(servicesList);
-    } catch (error) { 
-      console.error("Erro ao buscar serviços: ", error); 
-    } finally { 
-      setIsLoadingServices(false); 
-    }
+      const q = query(collection(db, "services"), where("barbershopId", "==", managedShopId));
+      const snapshot = await getDocs(q);
+      setServices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    } catch (error) { console.error("Erro serviços:", error); } 
+    finally { setIsLoadingServices(false); }
   }, [managedShopId]);
 
-  // Efeito Principal que carrega tudo
+  const fetchProducts = useCallback(async () => {
+    if (!managedShopId) return;
+    setIsLoadingProducts(true);
+    try {
+        const q = query(collection(db, "products"), where("barbershopId", "==", managedShopId));
+        const snapshot = await getDocs(q);
+        setProducts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    } catch (error) { console.error("Erro produtos:", error); } 
+    finally { setIsLoadingProducts(false); }
+  }, [managedShopId]);
+
   useEffect(() => {
     if (!managedShopId) return;
-    
     fetchShopProfile();
     fetchServices();
     fetchDashboardData();
+    fetchProducts();
     
-    // Inicia o "ouvinte" da lista de profissionais (em tempo real)
+    if (activeTab === 'sales') fetchSalesHistory();
+
     setIsLoadingPros(true);
-    const professionalsQuery = query(
-      collection(db, "professionals"),
-      where("barbershopId", "==", managedShopId)
+    const unsubscribe = onSnapshot(
+        query(collection(db, "professionals"), where("barbershopId", "==", managedShopId)), 
+        (snap) => {
+            setProfessionals(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+            setIsLoadingPros(false);
+        },
+        (error) => {
+            console.error("Erro profissionais:", error);
+            setIsLoadingPros(false);
+        }
     );
-    
-    const unsubscribe = onSnapshot(professionalsQuery, (querySnapshot) => {
-      const prosList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setProfessionals(prosList);
-      setIsLoadingPros(false);
-    }, (error) => {
-      console.error("Erro ao ouvir profissionais: ", error);
-      setIsLoadingPros(false);
-    });
-    
     return () => unsubscribe();
-    
-  }, [managedShopId, fetchShopProfile, fetchServices, fetchDashboardData]);
+  }, [managedShopId, fetchShopProfile, fetchServices, fetchDashboardData, fetchProducts, activeTab, fetchSalesHistory]);
 
-  // --- FUNÇÕES DE SALVAR / ATUALIZAR (EXISTENTE) ---
 
-  // 1. Salva o Perfil da Loja
+  // --- AÇÕES ---
+
   const handleUpdateShopProfile = async (e) => {
     e.preventDefault();
     setIsUploading(true);
     let newLogoUrl = shopProfile.logoUrl;
-
     try {
       if (newLogoFile) {
         const uploadPromise = uploadImageToCloudinary(newLogoFile);
-        toast.promise(uploadPromise, {
-          loading: 'Enviando nova logo...',
-          success: 'Logo enviada com sucesso!',
-          error: 'Erro ao enviar logo.',
-        });
+        toast.promise(uploadPromise, { loading: 'Enviando logo...', success: 'Logo atualizada!', error: 'Erro upload.' });
         newLogoUrl = await uploadPromise;
         setNewLogoFile(null);
       }
-      
-      const shopDocRef = doc(db, "barbershops", managedShopId);
-      await updateDoc(shopDocRef, {
+      await updateDoc(doc(db, "barbershops", managedShopId), {
         name: shopProfile.name,
+        phone: shopProfile.phone,
         address: shopProfile.address,
         cidade: shopProfile.cidade,
         description: shopProfile.description,
-        logoUrl: newLogoUrl
+        logoUrl: newLogoUrl,
+        brandPrimaryColor: shopProfile.brandPrimaryColor || '#D4AF37',
+        subdomain: shopProfile.subdomain || '',
+        requirePayment: shopProfile.requirePayment || false
       });
-      
-      toast.success("Perfil da loja atualizado com sucesso!");
-
-    } catch (error) {
-      console.error("Erro ao atualizar perfil: ", error);
-      toast.error("Erro ao atualizar: " + error.message);
-    } finally {
-      setIsUploading(false);
+      toast.success("Configurações salvas com sucesso!");
+    } catch (error) { 
+      console.error("Erro update perfil:", error);
+      toast.error("Erro ao salvar: " + error.message); 
+    } finally { 
+      setIsUploading(false); 
     }
   };
 
-  // 2. Adicionar Serviço
   const handleAddService = async (e) => {
     e.preventDefault();
     if (!serviceName || !servicePrice || !serviceDuration) return;
@@ -255,414 +263,406 @@ function AdminPanel() {
         duration: Number(serviceDuration),
         barbershopId: managedShopId
       });
-      toast.success("Serviço adicionado com sucesso!");
-      setServiceName(''); 
-      setServicePrice(''); 
-      setServiceDuration('');
+      toast.success("Serviço criado!");
+      setServiceName(''); setServicePrice(''); setServiceDuration('');
       fetchServices();
-    } catch (error) { 
-      console.error("Erro ao adicionar serviço: ", error); 
-      toast.error("Erro: " + error.message);
-    } finally { 
-      setIsLoadingServices(false); 
-    }
+    } catch (error) { toast.error("Erro ao criar serviço."); } 
+    finally { setIsLoadingServices(false); }
   };
   
-  // 3. Convidar Profissional
   const handleInviteProfessional = async (e) => {
     e.preventDefault();
-    if (!inviteName || !inviteEmail) return toast.warning("Preencha nome e email.");
+    if (!inviteName || !inviteEmail) return toast.warning("Preencha todos os dados.");
     setIsLoadingInvite(true);
     try {
       await addDoc(collection(db, "invites"), {
-        name: inviteName,
-        email: inviteEmail.toLowerCase(),
-        barbershopId: managedShopId,
-        status: "pending",
-        createdAt: Timestamp.now()
+        name: inviteName, email: inviteEmail.toLowerCase(), barbershopId: managedShopId, status: "pending", createdAt: Timestamp.now()
       });
-      toast.success(`Convite enviado para ${inviteName}!`);
-      setInviteName('');
-      setInviteEmail('');
-    } catch (error) {
-      console.error("Erro ao convidar: ", error);
-      toast.error("Erro ao enviar convite.");
-    } finally {
-      setIsLoadingInvite(false);
-    }
+      toast.success("Convite enviado!");
+      setInviteName(''); setInviteEmail('');
+    } catch (error) { toast.error("Erro ao convidar."); } 
+    finally { setIsLoadingInvite(false); }
   };
   
-  // 4. Remover Profissional
-  const handleRemoveProfessional = async (profId, profName, userId) => {
-    if (!window.confirm(`Tem certeza que quer remover "${profName}"?`)) return;
-
+  const handleRemoveProfessional = async (id, name, uid) => {
+    if (!window.confirm(`Tem certeza que deseja remover ${name}?`)) return;
     try {
       const batch = writeBatch(db);
-
-      const profDocRef = doc(db, "professionals", profId);
-      batch.delete(profDocRef);
-      
-      const roleDocRef = doc(db, "roles", userId);
-      batch.update(roleDocRef, {
-        role: "client",
-        worksAtShopId: deleteField()
-      });
-
+      batch.delete(doc(db, "professionals", id));
+      batch.update(doc(db, "roles", uid), { role: "client", worksAtShopId: deleteField() });
       await batch.commit();
-      
-      toast.success(`${profName} foi removido.`);
-      
-    } catch (error) {
-      console.error("Erro ao remover: ", error);
-      toast.error("Erro ao remover profissional: " + error.message);
-    }
+      toast.success("Profissional removido.");
+    } catch (e) { toast.error("Erro ao remover."); }
   };
 
- // 5. Salvar Chaves de Pagamento
   const handleSavePaymentKeys = async () => {
-    if (!mpAccessToken) return toast.warning("Por favor, cole o Access Token.");
+    if (!mpAccessToken) return toast.warning("O Token não pode estar vazio.");
     setIsSavingKeys(true);
     try {
       const batch = writeBatch(db);
-
-      const keysDocRef = doc(db, "barbershops", managedShopId, "private", "keys");
-      batch.set(keysDocRef, { accessToken: mpAccessToken }, { merge: true });
-
-      const shopDocRef = doc(db, "barbershops", managedShopId);
-      batch.update(shopDocRef, { onlinePaymentEnabled: true });
-      
+      batch.set(doc(db, "barbershops", managedShopId, "private", "keys"), { accessToken: mpAccessToken }, { merge: true });
+      batch.update(doc(db, "barbershops", managedShopId), { onlinePaymentEnabled: true });
       await batch.commit();
-      
-      toast.success("Pagamento online ATIVADO!");
+      toast.success("Pagamento configurado!");
       setMpAccessToken("");
-    } catch (error) {
-      console.error("Erro ao salvar chaves:", error);
-      toast.error("Erro ao salvar chaves.");
-    } finally {
-      setIsSavingKeys(false);
-    }
+    } catch (e) { toast.error("Erro ao salvar."); } 
+    finally { setIsSavingKeys(false); }
   };
-  
-  // --- RENDERIZAÇÃO DE SEÇÕES ---
 
-  // Componente de carregamento
-  const LoadingSpinner = () => (
-    <div className="flex justify-center py-10">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gold-main"></div>
-    </div>
-  );
+  const handleAddProduct = async (e) => {
+      e.preventDefault();
+      if (!productName || !productPrice || !productStock) return toast.warning("Preencha todos os campos.");
+      setIsSavingProduct(true);
+      try {
+          let img = '';
+          if (productImageFile) img = await uploadImageToCloudinary(productImageFile);
+          
+          await addDoc(collection(db, "products"), {
+              name: productName, 
+              price: Number(productPrice), 
+              stock: Number(productStock),
+              imageUrl: img || 'https://placehold.co/150?text=Produto', 
+              barbershopId: managedShopId, 
+              createdAt: Timestamp.now()
+          });
+          
+          toast.success("Produto salvo!");
+          setProductName(''); setProductPrice(''); setProductStock(''); setProductImageFile(null);
+          fetchProducts();
+      } catch (e) { 
+          console.error("Erro add produto:", e);
+          toast.error("Erro ao salvar produto."); 
+      } finally { 
+          setIsSavingProduct(false); 
+      }
+  };
 
-  // 1. Dashboard Section
+  const handleDeleteProduct = async (id) => {
+      if(!window.confirm("Excluir este produto permanentemente?")) return;
+      try { 
+          await deleteDoc(doc(db, "products", id)); 
+          toast.success("Produto excluído."); 
+          fetchProducts(); 
+      } catch(e){ 
+          toast.error("Erro ao excluir."); 
+      }
+  };
+
+  // --- RENDERIZAÇÃO ---
+
+  const Loading = () => <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gold-main"></div></div>;
+
+  // 1. Dashboard
   const renderDashboard = () => (
       <div className="space-y-6">
-          <h3 className="text-xl font-heading font-semibold text-text-primary">Métricas do Mês Atual</h3>
-          
-          {isLoadingDashboard ? <LoadingSpinner /> : (
+          <h3 className="text-xl font-heading font-semibold text-text-primary">Visão Geral do Mês</h3>
+          {isLoadingDashboard ? <Loading /> : (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                
-                {/* Card Faturamento */}
-                <div className="card-premium flex flex-col justify-between border-l-4 border-gold-main/70">
-                    <div className="flex justify-between items-center mb-4">
-                        <p className="text-sm font-medium text-text-secondary uppercase">Faturamento Bruto</p>
-                        <DollarSign size={20} className="text-gold-main" />
-                    </div>
-                    <p className="text-3xl font-heading font-bold text-white">
-                        R$ {dashboardData.totalRevenue.toFixed(2).replace('.', ',')}
-                    </p>
-                    <p className="text-xs text-text-secondary mt-2">Agendamentos concluídos</p>
+                <div className="card-premium border-l-4 border-gold-main/70 p-4">
+                    <div className="flex justify-between mb-2"><span className="text-xs uppercase text-text-secondary">Receita Total</span><DollarSign size={18} className="text-gold-main"/></div>
+                    <p className="text-2xl font-bold text-white">R$ {dashboardData.totalRevenue.toFixed(2)}</p>
                 </div>
-
-                {/* Card Agendamentos */}
-                <div className="card-premium flex flex-col justify-between border-l-4 border-blue-500/70">
-                    <div className="flex justify-between items-center mb-4">
-                        <p className="text-sm font-medium text-text-secondary uppercase">Agendamentos Totais</p>
-                        <Zap size={20} className="text-blue-500" />
-                    </div>
-                    <p className="text-3xl font-heading font-bold text-white">
-                        {dashboardData.totalAppointments}
-                    </p>
-                    <p className="text-xs text-text-secondary mt-2">Inclui pendentes e cancelados</p>
+                <div className="card-premium border-l-4 border-blue-500/70 p-4">
+                    <div className="flex justify-between mb-2"><span className="text-xs uppercase text-text-secondary">Agendamentos</span><Zap size={18} className="text-blue-500"/></div>
+                    <p className="text-2xl font-bold text-white">{dashboardData.totalAppointments}</p>
                 </div>
-
-                {/* Card Concluídos */}
-                <div className="card-premium flex flex-col justify-between border-l-4 border-green-500/70">
-                    <div className="flex justify-between items-center mb-4">
-                        <p className="text-sm font-medium text-text-secondary uppercase">Serviços Concluídos</p>
-                        <CheckCircle size={20} className="text-green-500" />
-                    </div>
-                    <p className="text-3xl font-heading font-bold text-white">
-                        {dashboardData.completedAppointments}
-                    </p>
-                    <p className="text-xs text-text-secondary mt-2">Fazem parte do faturamento</p>
+                <div className="card-premium border-l-4 border-green-500/70 p-4">
+                    <div className="flex justify-between mb-2"><span className="text-xs uppercase text-text-secondary">Concluídos</span><CheckCircle size={18} className="text-green-500"/></div>
+                    <p className="text-2xl font-bold text-white">{dashboardData.completedAppointments}</p>
                 </div>
-
-                {/* Card Cancelados */}
-                <div className="card-premium flex flex-col justify-between border-l-4 border-red-500/70">
-                    <div className="flex justify-between items-center mb-4">
-                        <p className="text-sm font-medium text-text-secondary uppercase">Taxa de Cancelamento</p>
-                        <TrendingDown size={20} className="text-red-500" />
-                    </div>
-                    <p className="text-3xl font-heading font-bold text-white">
-                        {dashboardData.cancellationRate}%
-                    </p>
-                    <p className="text-xs text-text-secondary mt-2">Agendamentos perdidos</p>
+                <div className="card-premium border-l-4 border-red-500/70 p-4">
+                    <div className="flex justify-between mb-2"><span className="text-xs uppercase text-text-secondary">Cancelamento</span><TrendingDown size={18} className="text-red-500"/></div>
+                    <p className="text-2xl font-bold text-white">{dashboardData.cancellationRate}%</p>
                 </div>
-
             </div>
           )}
-          
-          <h3 className="text-xl font-heading font-semibold text-text-primary mt-8">Próximos Passos (Relatórios)</h3>
-          <div className="card-premium bg-grafite-surface/50 border-dashed border flex items-center justify-center p-8 text-center text-text-secondary italic">
-              Relatórios avançados (comissão, faturamento por barbeiro) serão implementados em breve.
-          </div>
       </div>
   );
 
-  // 2. Configuração Section (Perfil da Loja + Pagamento)
+  // 2. Vendas
+  const renderSalesTab = () => (
+      <div className="space-y-6">
+          <div className="flex justify-between items-center border-b border-grafite-border pb-4">
+              <h3 className="text-xl font-heading font-semibold text-text-primary flex items-center gap-2">
+                  <ListChecks className="text-gold-main" size={20}/> Histórico de Pedidos
+              </h3>
+              <button onClick={fetchSalesHistory} className="text-xs text-gold-main hover:underline">Atualizar Lista</button>
+          </div>
+          
+          {isLoadingSales ? <Loading /> : salesHistory.length === 0 ? (
+              <p className="text-center text-text-secondary italic py-10 card-premium">Nenhuma venda registrada recentemente.</p>
+          ) : (
+              <div className="space-y-4">
+                  {salesHistory.map(sale => (
+                      <div key={sale.id} className="card-premium p-4 flex flex-col md:flex-row justify-between gap-4 hover:border-gold-main/30 transition-colors">
+                          <div className="flex-1">
+                              <div className="flex items-center gap-3 mb-2">
+                                  <span className="text-gold-main font-bold font-mono text-sm">#{sale.id.slice(0,6)}</span>
+                                  <span className="text-xs text-text-secondary">{sale.createdAt?.toDate ? sale.createdAt.toDate().toLocaleString('pt-BR') : 'Data desc.'}</span>
+                                  <span className={`text-[10px] px-2 py-0.5 rounded border uppercase ${sale.status === 'completed' ? 'border-green-500 text-green-400' : 'border-blue-500 text-blue-400'}`}>
+                                      {sale.status === 'completed' ? 'Concluído' : sale.status}
+                                  </span>
+                              </div>
+                              
+                              <div className="space-y-1 pl-2 border-l-2 border-grafite-border">
+                                  {sale.orderItems && sale.orderItems.map((item, idx) => (
+                                      <div key={idx} className="text-sm flex items-center justify-between text-text-primary pr-4">
+                                          <div className="flex items-center gap-2">
+                                              <span className="text-text-secondary">
+                                                  {item.type === 'service' ? <Scissors size={12}/> : <Package size={12}/>}
+                                              </span>
+                                              <span>{item.qty}x {item.name}</span>
+                                          </div>
+                                          <span className="text-xs text-text-secondary font-mono">R$ {item.price.toFixed(2)}</span>
+                                      </div>
+                                  ))}
+                                  {!sale.orderItems && (
+                                      <p className="text-xs text-text-secondary italic">Agendamento simples (sem detalhes de itens)</p>
+                                  )}
+                              </div>
+                          </div>
+                          
+                          <div className="flex flex-col items-end justify-center border-t md:border-t-0 md:border-l border-grafite-border pt-4 md:pt-0 md:pl-6 min-w-[140px]">
+                              <span className="text-xs text-text-secondary uppercase tracking-wider">Total</span>
+                              <span className="text-xl font-bold text-white">R$ {(sale.totalPrice || 0).toFixed(2)}</span>
+                              <span className="text-[10px] text-text-secondary mt-1 px-2 py-1 bg-grafite-main rounded border border-grafite-border">
+                                  {sale.paymentMethod?.includes('online') ? 'Pago Online' : 'Pagar na Loja'}
+                              </span>
+                          </div>
+                      </div>
+                  ))}
+              </div>
+          )}
+      </div>
+  );
+
+  // 3. Configurações
   const renderConfigSection = () => (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* --- Perfil da Loja --- */}
-        <section className="card-premium lg:col-span-1">
+        <section className="card-premium">
           <div className="border-b border-grafite-border pb-4 mb-6">
-            <h3 className="text-xl font-heading font-semibold text-text-primary flex items-center gap-2">
-                <Store className="text-gold-main" size={20}/>
-                Informações Públicas
-            </h3>
-            <p className="text-text-secondary text-sm mt-1">Gerencie a identidade e endereço da sua barbearia.</p>
+             <h3 className="text-xl font-heading font-semibold text-text-primary mb-1 flex items-center gap-2"><Store className="text-gold-main" size={20}/> Identidade</h3>
+             <p className="text-xs text-text-secondary">Personalize a aparência da sua loja.</p>
           </div>
           
           <form onSubmit={handleUpdateShopProfile} className="space-y-4">
-            
             <div className="space-y-1">
-              <label className="text-xs font-medium text-text-secondary ml-1" htmlFor="shopName">Nome da Barbearia:</label>
-              <input type="text" id="shopName" value={shopProfile.name} onChange={(e) => setShopProfile({...shopProfile, name: e.target.value})} className="input-premium" required/>
+                <label htmlFor="shop_name" className="text-xs text-text-secondary">Nome da Barbearia</label>
+                <input id="shop_name" name="shop_name" type="text" value={shopProfile.name} onChange={(e) => setShopProfile({...shopProfile, name: e.target.value})} className="input-premium text-sm" required/>
             </div>
-            
             <div className="space-y-1">
-              <label className="text-xs font-medium text-text-secondary ml-1" htmlFor="shopCity">Cidade:</label>
-              <input type="text" id="shopCity" value={shopProfile.cidade} onChange={(e) => setShopProfile({...shopProfile, cidade: e.target.value})} className="input-premium" required/>
+                <label htmlFor="shop_phone" className="text-xs text-text-secondary">WhatsApp da Loja</label>
+                <input id="shop_phone" name="shop_phone" type="text" value={shopProfile.phone || ''} onChange={(e) => setShopProfile({...shopProfile, phone: e.target.value})} className="input-premium text-sm" placeholder="(00) 90000-0000" required/>
             </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-secondary ml-1" htmlFor="shopAddress">Endereço:</label>
-              <input type="text" id="shopAddress" value={shopProfile.address} onChange={(e) => setShopProfile({...shopProfile, address: e.target.value})} className="input-premium" required/>
-            </div>
-
-            <div className="space-y-1">
-                <label className="text-xs font-medium text-text-secondary ml-1" htmlFor="shopDescription">Descrição ("Sobre"):</label>
-                <textarea id="shopDescription" value={shopProfile.description} onChange={(e) => setShopProfile({...shopProfile, description: e.target.value})} rows="3" className="input-premium resize-none"/>
-            </div>
-
-            <div className="space-y-1">
-                <span className="text-xs font-medium text-text-secondary ml-1">Trocar Logo (opcional):</span>
-                <div className="flex items-center gap-4 bg-grafite-main p-3 rounded-lg border border-grafite-border border-dashed">
-                    <img src={shopProfile.logoUrl} alt="Logo atual" className="w-16 h-16 object-cover rounded-full border-2 border-gold-main"/>
-                    <input type="file" id="newShopLogo" accept="image/png, image/jpeg" onChange={(e) => setNewLogoFile(e.target.files[0])}
-                    className="block w-full text-sm text-text-secondary file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-gold-dim file:text-gold-main hover:file:bg-gold-dim/80 cursor-pointer"
-                    />
+            <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                    <label htmlFor="shop_city" className="text-xs text-text-secondary">Cidade</label>
+                    <input id="shop_city" name="shop_city" type="text" value={shopProfile.cidade} onChange={(e) => setShopProfile({...shopProfile, cidade: e.target.value})} className="input-premium text-sm"/>
+                </div>
+                <div className="space-y-1">
+                    <label htmlFor="shop_address" className="text-xs text-text-secondary">Endereço</label>
+                    <input id="shop_address" name="shop_address" type="text" value={shopProfile.address} onChange={(e) => setShopProfile({...shopProfile, address: e.target.value})} className="input-premium text-sm"/>
                 </div>
             </div>
+            <div className="space-y-1">
+                <label htmlFor="shop_desc" className="text-xs text-text-secondary">Descrição</label>
+                <textarea id="shop_desc" name="shop_desc" value={shopProfile.description} onChange={(e) => setShopProfile({...shopProfile, description: e.target.value})} className="input-premium resize-none text-sm" rows="2"/>
+            </div>
             
-            <button type="submit" disabled={isUploading} className="btn-primary w-full h-10 mt-6">
-              {isUploading ? 'Salvando...' : 'Salvar Perfil'}
-            </button>
+            {/* Campos Whitelabel */}
+            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-grafite-border mt-4">
+                <div className="space-y-1">
+                    <label htmlFor="shop_color" className="text-xs text-text-secondary flex items-center gap-1"><Palette size={12}/> Cor da Marca</label>
+                    <div className="flex gap-2">
+                        <input id="shop_color_picker" name="shop_color_picker" type="color" value={shopProfile.brandPrimaryColor || '#D4AF37'} onChange={(e) => setShopProfile({...shopProfile, brandPrimaryColor: e.target.value})} className="h-9 w-9 rounded cursor-pointer bg-transparent border-0 p-0"/>
+                        <input id="shop_color" name="shop_color" type="text" value={shopProfile.brandPrimaryColor || '#D4AF37'} onChange={(e) => setShopProfile({...shopProfile, brandPrimaryColor: e.target.value})} className="input-premium text-xs h-9"/>
+                    </div>
+                </div>
+                <div className="space-y-1">
+                    <label htmlFor="shop_subdomain" className="text-xs text-text-secondary flex items-center gap-1"><LinkIcon size={12}/> Subdomínio</label>
+                    <div className="flex items-center">
+                        <span className="text-xs text-text-secondary mr-1">app.</span>
+                        <input id="shop_subdomain" name="shop_subdomain" type="text" value={shopProfile.subdomain || ''} onChange={(e) => setShopProfile({...shopProfile, subdomain: e.target.value.toLowerCase()})} className="input-premium text-xs h-9" placeholder="viking"/>
+                    </div>
+                </div>
+            </div>
+
+            <div className="space-y-1 mt-2">
+                <label htmlFor="shop_logo" className="text-xs text-text-secondary">Logo da Loja</label>
+                <div className="flex items-center gap-4 bg-grafite-main p-2 rounded-lg border border-grafite-border border-dashed">
+                    <img src={shopProfile.logoUrl} alt="Logo" className="w-10 h-10 rounded-full object-cover border border-gold-main"/>
+                    <input id="shop_logo" name="shop_logo" type="file" accept="image/*" onChange={(e) => setNewLogoFile(e.target.files[0])} className="text-xs text-text-secondary file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-gold-dim file:text-gold-main cursor-pointer"/>
+                </div>
+            </div>
+
+            <button type="submit" disabled={isUploading} className="btn-primary w-full h-10 mt-4 text-sm font-bold tracking-wide uppercase">{isUploading ? 'Salvando...' : 'Salvar Identidade'}</button>
           </form>
         </section>
 
-        {/* --- Configuração de Pagamento --- */}
-        <section className="card-premium lg:col-span-1">
+        {/* Pagamento */}
+        <section className="card-premium h-fit">
           <div className="border-b border-grafite-border pb-4 mb-6">
-            <h3 className="text-xl font-heading font-semibold text-text-primary flex items-center gap-2">
-                <DollarSign className="text-green-500" size={20}/>
-                Configuração de Pagamento
-            </h3>
-            <p className="text-text-secondary text-sm mt-1">Configure o Mercado Pago para pagamentos online.</p>
+             <h3 className="text-xl font-heading font-semibold text-text-primary mb-1 flex items-center gap-2"><DollarSign className="text-green-500" size={20}/> Financeiro</h3>
+             <p className="text-xs text-text-secondary">Integração com Mercado Pago.</p>
           </div>
-
           <div className="space-y-4">
             <div className="space-y-1">
-              <label className="text-xs font-medium text-text-secondary ml-1">Access Token (Produção):</label>
-              <input type="password" value={mpAccessToken} onChange={(e) => setMpAccessToken(e.target.value)} placeholder="APP_USR-..." className="input-premium font-mono text-sm"/>
+                <label htmlFor="mp_token" className="text-xs text-text-secondary">Access Token (Produção)</label>
+                <input id="mp_token" name="mp_token" type="password" value={mpAccessToken} onChange={(e) => setMpAccessToken(e.target.value)} placeholder="APP_USR-..." className="input-premium font-mono text-xs h-9"/>
             </div>
-            
-            <div className="flex items-center gap-3 bg-grafite-main p-3 rounded-lg border border-grafite-border">
-                <input 
-                    type="checkbox" 
-                    id="requirePayment"
-                    checked={shopProfile.requirePayment || false}
-                    onChange={(e) => setShopProfile({...shopProfile, requirePayment: e.target.checked})}
-                    className="w-4 h-4 rounded border-grafite-border bg-grafite-surface text-gold-main focus:ring-gold-main/50 accent-gold-main"
-                />
-                <label htmlFor="requirePayment" className="text-sm text-text-primary cursor-pointer">
-                    Exigir pagamento online no agendamento (Desativa a opção "Pagar na Loja" para clientes online).
-                </label>
+            <div className="flex items-start gap-3 bg-grafite-main p-3 rounded-lg border border-grafite-border">
+                <input type="checkbox" id="requirePayment" name="requirePayment" checked={shopProfile.requirePayment || false} onChange={(e) => setShopProfile({...shopProfile, requirePayment: e.target.checked})} className="mt-1 accent-gold-main"/>
+                <label htmlFor="requirePayment" className="text-xs text-text-primary cursor-pointer">Exigir pagamento online no agendamento.</label>
             </div>
-
-            <button onClick={handleSavePaymentKeys} disabled={isSavingKeys} className="btn-primary w-full h-10">
-              {isSavingKeys ? 'Salvando Credenciais...' : 'Salvar Credenciais'}
-            </button>
-
-            {shopProfile.onlinePaymentEnabled && (
-                <div className="p-3 bg-green-950/20 border border-green-500/50 rounded-lg text-green-400 text-sm flex items-center gap-2">
-                    <CheckCircle size={16} /> Pagamento Online Habilitado.
-                </div>
-            )}
+            <button onClick={handleSavePaymentKeys} disabled={isSavingKeys} className="btn-primary w-full h-9 text-xs font-bold uppercase">{isSavingKeys ? 'Salvando...' : 'Salvar Config'}</button>
           </div>
         </section>
     </div>
   );
-  
-  // 3. Serviços Section
-  const renderServicesSection = () => (
-    <section className="card-premium">
-        <div className="border-b border-grafite-border pb-4 mb-6">
-          <h3 className="text-xl font-heading font-semibold text-text-primary flex items-center gap-2">
-              <Scissors className="text-gold-main" size={20}/>
-              Menu de Serviços
-          </h3>
-          <p className="text-text-secondary text-sm mt-1">Adicione ou remova os serviços que sua barbearia oferece.</p>
-        </div>
 
-        <form onSubmit={handleAddService} className="grid grid-cols-1 md:grid-cols-12 gap-4 mb-8 bg-grafite-surface p-4 rounded-lg border border-grafite-border">
-          <div className="md:col-span-4 space-y-1">
-            <label className="text-xs font-medium text-text-secondary ml-1">Nome do Serviço</label>
-            <input type="text" value={serviceName} onChange={(e) => setServiceName(e.target.value)} placeholder="Ex: Corte Degradê" className="input-premium text-sm py-2" required/>
-          </div>
-          <div className="md:col-span-3 space-y-1">
-            <label className="text-xs font-medium text-text-secondary ml-1">Preço (R$)</label>
-            <input type="number" value={servicePrice} onChange={(e) => setServicePrice(e.target.value)} placeholder="0.00" className="input-premium text-sm py-2" required/>
-          </div>
-          <div className="md:col-span-3 space-y-1">
-            <label className="text-xs font-medium text-text-secondary ml-1">Duração (min)</label>
-            <input type="number" value={serviceDuration} onChange={(e) => setServiceDuration(e.target.value)} placeholder="30" className="input-premium text-sm py-2" required/>
-          </div>
-          <div className="md:col-span-2 flex items-end">
-            <button type="submit" disabled={isLoadingServices} className="btn-primary w-full h-[38px] flex items-center justify-center">
-              Adicionar
-            </button>
-          </div>
+  // 4. Serviços
+  const renderServices = () => (
+    <section className="card-premium">
+        <div className="flex justify-between items-center mb-6 border-b border-grafite-border pb-4"><h3 className="text-xl font-bold text-text-primary flex gap-2"><Scissors className="text-gold-main"/> Serviços</h3></div>
+        <form onSubmit={handleAddService} className="grid grid-cols-1 md:grid-cols-12 gap-3 mb-6 bg-grafite-surface p-4 rounded-lg border border-grafite-border">
+             <div className="md:col-span-5">
+                 <label htmlFor="service_name" className="text-xs font-medium text-text-secondary ml-1">Nome</label>
+                 <input id="service_name" name="service_name" type="text" value={serviceName} onChange={(e)=>setServiceName(e.target.value)} placeholder="Ex: Corte Degradê" className="input-premium text-sm" required/>
+             </div>
+             <div className="md:col-span-3">
+                 <label htmlFor="service_price" className="text-xs font-medium text-text-secondary ml-1">Preço</label>
+                 <input id="service_price" name="service_price" type="number" value={servicePrice} onChange={(e)=>setServicePrice(e.target.value)} placeholder="R$" className="input-premium text-sm" required/>
+             </div>
+             <div className="md:col-span-3">
+                 <label htmlFor="service_duration" className="text-xs font-medium text-text-secondary ml-1">Duração</label>
+                 <input id="service_duration" name="service_duration" type="number" value={serviceDuration} onChange={(e)=>setServiceDuration(e.target.value)} placeholder="Min" className="input-premium text-sm" required/>
+             </div>
+             <div className="md:col-span-1 flex items-end"><button type="submit" disabled={isLoadingServices} className="btn-primary w-full h-[42px] flex justify-center items-center"><Plus size={16}/></button></div>
         </form>
-        
-        <div className="space-y-3">
-          <h4 className="text-sm font-semibold text-text-primary uppercase tracking-wider mb-4">Serviços Ativos</h4>
-          {isLoadingServices ? <LoadingSpinner /> : (
-            services.length === 0 ? (
-              <p className="text-text-secondary italic text-center py-4 bg-grafite-main rounded-lg border border-grafite-border border-dashed">Nenhum serviço cadastrado.</p>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {services.map(s => (
-                  <div key={s.id} className="bg-grafite-main border border-grafite-border p-4 rounded-lg flex justify-between items-center hover:border-gold-main/50 transition-colors">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {services.map(s=>(
+                <div key={s.id} className="bg-grafite-main border border-grafite-border p-3 rounded-lg flex justify-between items-center">
                     <div>
-                      <strong className="block text-text-primary">{s.name}</strong>
-                      <span className="text-gold-main text-sm font-medium">R$ {s.price.toFixed(2)}</span>
-                      <span className="text-text-secondary text-xs ml-2">• {s.duration} min</span>
+                        <strong className="block text-sm text-text-primary">{s.name}</strong>
+                        <span className="text-xs text-text-secondary">{s.duration} min</span>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )
-          )}
-        </div>
-      </section>
-  );
-
-  // 4. Equipe Section
-  const renderTeamSection = () => (
-    <section className="card-premium">
-        <div className="border-b border-grafite-border pb-4 mb-6">
-          <h3 className="text-xl font-heading font-semibold text-text-primary flex items-center gap-2">
-              <Users className="text-gold-main" size={20}/>
-              Gerenciar Equipe
-          </h3>
-          <p className="text-text-secondary text-sm mt-1">Convide e gerencie os profissionais vinculados à sua loja.</p>
-        </div>
-
-        <div className="bg-grafite-surface border border-grafite-border rounded-lg p-6 mb-8">
-          <h4 className="text-lg font-heading font-semibold text-text-primary mb-4 flex items-center gap-2">
-            <UserPlus size={20} className="text-gold-main"/>
-            Convidar Novo Profissional
-          </h4>
-          <form onSubmit={handleInviteProfessional} className="flex flex-col md:flex-row gap-4 items-end">
-            <div className="w-full md:flex-1 space-y-1">
-              <label className="text-xs font-medium text-text-secondary ml-1">Nome</label>
-              <input type="text" id="inviteName" value={inviteName} onChange={(e) => setInviteName(e.target.value)} placeholder="Nome do profissional" className="input-premium" required/>
-            </div>
-            <div className="w-full md:flex-1 space-y-1">
-              <label className="text-xs font-medium text-text-secondary ml-1">E-mail</label>
-              <input type="email" id="inviteEmail" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="email@exemplo.com" className="input-premium" required/>
-            </div>
-            <button type="submit" disabled={isLoadingInvite} className="btn-primary w-full md:w-auto min-w-[150px] h-[46px] text-sm">
-              {isLoadingInvite ? 'Enviando...' : 'Enviar Convite'}
-            </button>
-          </form>
-        </div>
-        
-        <h4 className="text-sm font-semibold text-text-primary uppercase tracking-wider mb-4">Profissionais Ativos</h4>
-        {isLoadingPros ? <LoadingSpinner /> : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {professionals.length === 0 && (
-               <p className="col-span-full text-center text-text-secondary py-8 bg-grafite-main rounded-lg border border-grafite-border border-dashed">
-                 Nenhum profissional ativo.
-               </p>
-            )}
-            {professionals.map(prof => (
-              <div key={prof.id} className="bg-grafite-main border border-grafite-border p-5 rounded-lg flex flex-col justify-between gap-4 hover:shadow-lg transition-shadow">
-                <div className="flex items-center gap-3">
-                   <div className="w-10 h-10 rounded-full bg-grafite-surface flex items-center justify-center text-gold-main font-bold border border-grafite-border">
-                      {prof.name.charAt(0).toUpperCase()}
-                   </div>
-                   <div>
-                     <p className="font-bold text-text-primary">{prof.name}</p>
-                     <p className="text-xs text-text-secondary">Barbeiro</p>
-                   </div>
+                    <span className="text-gold-main font-bold text-sm">R$ {s.price}</span>
                 </div>
-                <button 
-                  className="w-full py-2 px-4 rounded border border-red-900/50 text-red-400 text-sm hover:bg-red-900/20 transition-colors"
-                  onClick={() => handleRemoveProfessional(prof.id, prof.name, prof.userId)}
-                  disabled={isLoadingPros}
-                >
-                  Remover da Equipe
-                </button>
-              </div>
             ))}
-          </div>
-        )}
+        </div>
+    </section>
+  );
+
+  // 5. Equipe
+  const renderTeam = () => (
+    <section className="card-premium">
+        <div className="flex justify-between items-center mb-6 border-b border-grafite-border pb-4"><h3 className="text-xl font-bold text-text-primary flex gap-2"><Users className="text-gold-main"/> Equipe</h3></div>
+        <div className="bg-grafite-surface p-4 rounded-lg mb-6 flex flex-col md:flex-row gap-3 items-end border border-grafite-border">
+            <div className="w-full"><label htmlFor="invite_name" className="text-xs text-text-secondary ml-1">Nome</label><input id="invite_name" name="invite_name" type="text" value={inviteName} onChange={(e)=>setInviteName(e.target.value)} className="input-premium text-sm h-10"/></div>
+            <div className="w-full"><label htmlFor="invite_email" className="text-xs text-text-secondary ml-1">Email</label><input id="invite_email" name="invite_email" type="email" value={inviteEmail} onChange={(e)=>setInviteEmail(e.target.value)} className="input-premium text-sm h-10"/></div>
+            <button onClick={handleInviteProfessional} disabled={isLoadingInvite} className="btn-primary w-full md:w-auto h-10 text-sm px-6">Convidar</button>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {professionals.map(p=>(
+                <div key={p.id} className="bg-grafite-main border border-grafite-border p-4 rounded-lg flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-grafite-surface border border-grafite-border flex items-center justify-center text-xs font-bold text-gold-main">{p.name.charAt(0)}</div>
+                        <span className="text-sm font-medium">{p.name}</span>
+                    </div>
+                    <button onClick={()=>handleRemoveProfessional(p.id,p.name,p.userId)} className="text-text-secondary hover:text-red-400"><Trash2 size={16}/></button>
+                </div>
+            ))}
+        </div>
+    </section>
+  );
+
+  // 6. Produtos
+  const renderProducts = () => (
+      <section className="card-premium">
+          <div className="flex justify-between items-center mb-6 border-b border-grafite-border pb-4"><h3 className="text-xl font-bold text-text-primary flex gap-2"><Package className="text-gold-main"/> Produtos</h3></div>
+          
+          <form onSubmit={handleAddProduct} className="grid grid-cols-1 md:grid-cols-12 gap-3 mb-6 bg-grafite-surface p-4 rounded-lg border border-grafite-border">
+              <div className="md:col-span-4">
+                  <label htmlFor="product_name" className="text-xs text-text-secondary ml-1">Produto</label>
+                  <input id="product_name" name="product_name" type="text" value={productName} onChange={(e)=>setProductName(e.target.value)} placeholder="Ex: Pomada" className="input-premium text-sm" required/>
+              </div>
+              <div className="md:col-span-2">
+                  <label htmlFor="product_price" className="text-xs text-text-secondary ml-1">Preço</label>
+                  <input id="product_price" name="product_price" type="number" value={productPrice} onChange={(e)=>setProductPrice(e.target.value)} placeholder="R$" className="input-premium text-sm" required/>
+              </div>
+              <div className="md:col-span-2">
+                  <label htmlFor="product_stock" className="text-xs text-text-secondary ml-1">Estoque</label>
+                  <input id="product_stock" name="product_stock" type="number" value={productStock} onChange={(e)=>setProductStock(e.target.value)} placeholder="Qtd" className="input-premium text-sm" required/>
+              </div>
+              <div className="md:col-span-3">
+                  <label htmlFor="product_image" className="text-xs text-text-secondary ml-1">Foto</label>
+                  <input id="product_image" name="product_image" type="file" accept="image/*" onChange={(e)=>setProductImageFile(e.target.files[0])} className="text-xs text-text-secondary pt-2 block"/>
+              </div>
+              <div className="md:col-span-1 flex items-end"><button type="submit" disabled={isSavingProduct} className="btn-primary w-full h-[42px] flex justify-center items-center"><Plus size={16}/></button></div>
+          </form>
+          
+          {isLoadingProducts ? <Loading /> : (
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {products.length === 0 && <p className="col-span-full text-center text-text-secondary italic py-8">Nenhum produto no estoque.</p>}
+                  {products.map(p=>(
+                      <div key={p.id} className="bg-grafite-main border border-grafite-border rounded-lg overflow-hidden group relative hover:border-gold-main/50 transition-all">
+                          <div className="h-32 bg-grafite-card flex items-center justify-center overflow-hidden">
+                              {p.imageUrl ? <img src={p.imageUrl} className="w-full h-full object-cover"/> : <ShoppingBag className="text-text-secondary/30"/>}
+                          </div>
+                          <div className="p-3">
+                              <h4 className="font-bold text-sm truncate">{p.name}</h4>
+                              <div className="flex justify-between items-center mt-1">
+                                  <span className="text-gold-main text-sm font-bold">R$ {p.price}</span>
+                                  <span className="text-[10px] bg-grafite-surface px-1.5 py-0.5 rounded border border-grafite-border">{p.stock} un</span>
+                              </div>
+                          </div>
+                          <button onClick={()=>handleDeleteProduct(p.id)} className="absolute top-2 right-2 bg-red-600 text-white p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={14}/></button>
+                      </div>
+                  ))}
+              </div>
+          )}
       </section>
   );
 
-  // Se o perfil da loja não foi carregado
-  if (isLoadingProfile || !shopProfile) {
-    return <LoadingSpinner />;
-  }
+  if (isLoadingProfile || !shopProfile) return <Loading />;
   
-  // --- RENDERIZAÇÃO PRINCIPAL DO PAINEL ADMIN ---
   return (
     <div className="max-w-7xl mx-auto p-4 space-y-6 animate-fade-in">
+      {forcedShopId && (
+          <button onClick={onBack} className="flex items-center gap-2 text-gold-main hover:underline mb-4">
+              <ArrowLeft size={18}/> Voltar para Visão Global
+          </button>
+      )}
+
+      <div className="flex justify-between items-end mb-6">
+          <h2 className="text-3xl font-heading font-bold text-gold-main">
+              {forcedShopId ? `Gerenciando: ${shopProfile.name}` : 'Administração'}
+          </h2>
+          {forcedShopId && <span className="text-xs bg-red-900/50 text-red-300 border border-red-800 px-2 py-1 rounded font-bold uppercase">Modo Deus</span>}
+      </div>
       
-      <h2 className="text-3xl font-heading font-bold text-gold-main mb-6">Administração da Barbearia</h2>
-      
-      {/* --- Navegação por Abas --- */}
-      <div className="flex p-1 bg-grafite-card border border-grafite-border rounded-xl mb-8 overflow-x-auto">
-        {[{id: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard}, {id: 'config', label: 'Configurações', Icon: FileText}, {id: 'services', label: 'Serviços', Icon: Scissors}, {id: 'team', label: 'Equipe', Icon: Users}].map(({id, label, Icon}) => (
-            <button 
-                key={id}
-                onClick={() => setActiveTab(id)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-300
-                    ${activeTab === id ? 'bg-gold-main text-grafite-main shadow-glow' : 'text-text-secondary hover:text-text-primary'}`
-                }
-            >
-                <Icon size={18} />
-                {label}
+      <div className="flex p-1 bg-grafite-card border border-grafite-border rounded-xl mb-8 overflow-x-auto gap-1 scrollbar-hide">
+        {[
+            {id: 'dashboard', label: 'Visão Geral', Icon: LayoutDashboard}, 
+            {id: 'sales', label: 'Vendas', Icon: ListChecks}, 
+            {id: 'config', label: 'Configurações', Icon: FileText}, 
+            {id: 'services', label: 'Serviços', Icon: Scissors}, 
+            {id: 'team', label: 'Equipe', Icon: Users},
+            {id: 'products', label: 'Produtos', Icon: Package}
+        ].map(({id, label, Icon}) => (
+            <button key={id} onClick={() => setActiveTab(id)} className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-300 ${activeTab === id ? 'bg-gold-main text-grafite-main shadow-glow transform scale-105' : 'text-text-secondary hover:text-text-primary hover:bg-grafite-surface'}`}>
+                <Icon size={18} /> {label}
             </button>
         ))}
       </div>
 
-      {/* --- Conteúdo das Abas --- */}
       <div className="min-h-[500px]">
           {activeTab === 'dashboard' && renderDashboard()}
+          {activeTab === 'sales' && renderSalesTab()}
           {activeTab === 'config' && renderConfigSection()}
-          {activeTab === 'services' && renderServicesSection()}
-          {activeTab === 'team' && renderTeamSection()}
+          {activeTab === 'services' && renderServices()}
+          {activeTab === 'team' && renderTeam()}
+          {activeTab === 'products' && renderProducts()}
       </div>
     </div>
   );

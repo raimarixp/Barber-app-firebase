@@ -11,12 +11,14 @@ import { Toaster } from 'sonner'; // Gerenciador de notificações global
 import { User, Store, ArrowRight, Scissors } from 'lucide-react';
 
 // Componentes Refatorados
+import SuperAdminPanel from './components/SuperAdminPanel/SuperAdminPanel.jsx';
 import AuthChat from './components/AuthChat/AuthChat.jsx';
 import ShopRegistration from './components/ShopRegistration/ShopRegistration.jsx';
 import AdminPanel from './components/AdminPanel/AdminPanel.jsx'; 
 import ClientPanel from './components/ClientPanel/ClientPanel.jsx'; 
 import ProfessionalPanel from './components/ProfessionalPanel/ProfessionalPanel.jsx';
 import Layout from './components/Layout/Layout.jsx'; // Novo Layout wrapper
+
 
 // --- Contexto Global ---
 const ShopContext = createContext();
@@ -111,6 +113,7 @@ function App() {
             {userData.role === 'admin' && <AdminPanel />}
             {userData.role === 'client' && <ClientPanel />}
             {userData.role === 'professional' && <ProfessionalPanel />}
+            {userData.role === 'super_admin' && <SuperAdminPanel />}
             
             {/* Fallback para role desconhecida */}
             {!['admin', 'client', 'professional'].includes(userData.role) && (

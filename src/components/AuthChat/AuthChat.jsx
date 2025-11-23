@@ -1,5 +1,5 @@
 // src/components/AuthChat/AuthChat.jsx
-// (COMPLETO - Visual Premium + Tailwind + Lógica de Convite)
+// (COMPLETO - Com Coleta de WhatsApp do Usuário)
 
 import { useState, useEffect, useRef } from 'react';
 import { 
@@ -23,6 +23,7 @@ function AuthChat({ onBack }) {
   // Estados para guardar os dados
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState(''); // NOVO: Estado para o telefone
 
   // Estado do histórico de mensagens
   const [messages, setMessages] = useState([
@@ -77,6 +78,11 @@ function AuthChat({ onBack }) {
       }
       else if (step === 'signup_email') {
         setEmail(userInput.toLowerCase());
+        setStep('signup_phone'); // Próximo passo: Telefone
+        addMessage("Anotado! E qual seu WhatsApp para contato? (Ex: 11 99999-9999)", "bot");
+      }
+      else if (step === 'signup_phone') {
+        setPhone(userInput); // Salva o telefone
         setStep('signup_password');
         addMessage("Perfeito. Agora, crie uma senha segura (mínimo 6 caracteres):", "bot");
       }
@@ -84,7 +90,7 @@ function AuthChat({ onBack }) {
       // === FINALIZAÇÃO DO CADASTRO (COM CHECAGEM DE CONVITE) ===
       else if (step === 'signup_password') {
         const newPassword = userInput;
-        const userEmail = email; // Já está em minúsculas
+        const userEmail = email; 
         
         if (newPassword.length < 6) {
           throw new Error("A senha precisa ter pelo menos 6 caracteres.");
@@ -102,19 +108,26 @@ function AuthChat({ onBack }) {
         );
         
         const inviteSnapshot = await getDocs(invitesQuery);
-        
-        // Filtra status no JS
         const pendingInvite = inviteSnapshot.docs.find(
           doc => doc.data().status === "pending"
         );
         
         const batch = writeBatch(db);
         
+        // Dados comuns do usuário (AGORA COM TELEFONE)
+        const userData = { 
+            uid: user.uid, 
+            displayName: fullName, 
+            email: userEmail, 
+            phoneNumber: phone, // SALVANDO AQUI
+            createdAt: new Date() 
+        };
+
         if (!pendingInvite) {
           // --- CLIENTE NORMAL ---
           console.log("Cadastrando como Cliente.");
           const userDocRef = doc(db, "users", user.uid);
-          batch.set(userDocRef, { uid: user.uid, displayName: fullName, email: userEmail, createdAt: new Date() });
+          batch.set(userDocRef, userData);
           
           const roleDocRef = doc(db, "roles", user.uid);
           batch.set(roleDocRef, { role: "client" });
@@ -126,7 +139,7 @@ function AuthChat({ onBack }) {
           const inviteData = inviteDoc.data();
           
           const userDocRef = doc(db, "users", user.uid);
-          batch.set(userDocRef, { uid: user.uid, displayName: fullName, email: userEmail, createdAt: new Date() });
+          batch.set(userDocRef, userData);
           
           const roleDocRef = doc(db, "roles", user.uid);
           batch.set(roleDocRef, {
@@ -163,7 +176,6 @@ function AuthChat({ onBack }) {
       } 
       else if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found') {
         addMessage("Credenciais incorretas. Por favor, tente novamente:", "bot");
-        // Mantém no mesmo passo para tentar de novo
       } 
       else if (error.message.includes("6 caracteres")) {
          addMessage("Senha muito curta. Tente uma com 6 ou mais caracteres:", "bot");
@@ -273,12 +285,13 @@ function AuthChat({ onBack }) {
         {step !== 'initial' && (
           <form onSubmit={handleSend} className="p-4 bg-grafite-main border-t border-grafite-border flex gap-3 items-center">
             <input 
-              type={step.includes('password') ? 'password' : step.includes('email') ? 'email' : 'text'}
+              type={step.includes('password') ? 'password' : step.includes('email') ? 'email' : step.includes('phone') ? 'tel' : 'text'}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               placeholder={
                 step.includes('password') ? 'Digite sua senha...' : 
                 step.includes('email') ? 'Digite seu e-mail...' : 
+                step.includes('phone') ? 'Digite seu WhatsApp...' :
                 'Digite sua resposta...'
               }
               className="flex-1 bg-grafite-surface border border-grafite-border rounded-full px-5 py-3 text-sm text-text-primary placeholder-text-secondary/50 outline-none focus:border-gold-main focus:ring-1 focus:ring-gold-main/50 transition-all"
