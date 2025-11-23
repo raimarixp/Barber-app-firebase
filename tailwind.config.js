@@ -12,25 +12,26 @@ export default {
       },
       colors: {
         grafite: {
-          main: '#1A1A1A',      // Fundo principal
-          card: '#1C1C1C',      // Superfícies
-          surface: '#222222',   // Hover/Cards secundários
-          border: '#2a2a2a',    // Bordas sutis
+          main: '#1A1A1A',      
+          card: '#1C1C1C',      
+          surface: '#222222',   
+          border: '#2a2a2a',    
           borderLight: '#3a3a3a',
         },
         gold: {
-          main: '#D4AF37',      // Destaque principal
-          hover: '#C8A233',     // Hover dourado
-          dim: 'rgba(212, 175, 55, 0.1)', // Para fundos de input com foco
+          // MUDANÇA: Agora usa variáveis CSS para permitir troca dinâmica
+          main: 'var(--brand-primary)',      
+          hover: 'var(--brand-hover)',     
+          dim: 'var(--brand-dim)', 
         },
         text: {
-          primary: '#F5F5F5',   // Branco suave
-          secondary: '#BDBDBD', // Cinza texto
+          primary: '#F5F5F5',   
+          secondary: '#BDBDBD', 
         }
       },
       boxShadow: {
         'premium': '0 10px 30px -10px rgba(0, 0, 0, 0.5)',
-        'glow': '0 0 15px rgba(212, 175, 55, 0.15)', // Brilho dourado sutil
+        'glow': '0 0 15px var(--brand-dim)', // Glow também será dinâmico
       },
       letterSpacing: {
         premium: '0.25px',

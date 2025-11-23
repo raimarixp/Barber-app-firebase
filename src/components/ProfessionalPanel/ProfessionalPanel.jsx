@@ -629,7 +629,7 @@ function ProfessionalPanel() {
     <div className="max-w-7xl mx-auto p-4 space-y-6 animate-fade-in">
       <h2 className="text-3xl font-heading font-bold text-gold-main mb-6">Painel do Profissional</h2>
       <div className="flex p-1 bg-grafite-card border border-grafite-border rounded-xl mb-8 overflow-x-auto gap-1">
-        {[{id: 'agenda', label: 'Agenda', Icon: Calendar}, {id: 'booking', label: 'Novo Agendamento', Icon: UserPlus}, {id: 'performance', label: 'Performance', Icon: TrendingUp}, {id: 'config', label: 'Configurações', Icon: Clock}].map(({id, label, Icon}) => (
+        {[{id: 'agenda', label: 'Agenda', Icon: Calendar}, {id: 'booking', label: 'Novo Agendamento', Icon: UserPlus}, {id: 'performance', label: 'Performance', Icon: TrendingUp}, {id: 'config', label: 'Configurações', Icon: Clock}, {id: 'clients', label: 'Clientes', Icon: Megaphone}].map(({id, label, Icon}) => (
             <button key={id} onClick={() => setActiveTab(id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${activeTab === id ? 'bg-gold-main text-grafite-main shadow-glow' : 'text-text-secondary hover:text-text-primary'}`}>
                 <Icon size={18} /> {label}
             </button>
@@ -640,6 +640,7 @@ function ProfessionalPanel() {
           {activeTab === 'booking' && renderBookingManual()}
           {activeTab === 'config' && renderConfig()}
           {activeTab === 'performance' && renderPerformance()}
+          {activeTab === 'clients' && renderClientsCRM()}
       </div>
     </div>
   );
