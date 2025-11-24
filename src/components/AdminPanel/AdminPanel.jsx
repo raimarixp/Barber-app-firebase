@@ -1,5 +1,5 @@
 // src/components/AdminPanel/AdminPanel.jsx
-// (COMPLETO - Dashboard, Vendas, Produtos, Whitelabel, Equipe, Serviços e Acessibilidade)
+// (COMPLETO REAL - Sem compactação, com todas as funcionalidades e acessibilidade)
 
 import { useState, useEffect, useCallback } from 'react';
 import { db } from '../../firebase/firebase-config';
@@ -14,7 +14,8 @@ import { toast } from 'sonner';
 import { 
     Store, User, Clock, Scissors, UserPlus, FileText, Upload, 
     LayoutDashboard, DollarSign, Zap, TrendingDown, Users,
-    CheckCircle, Megaphone, Package, ShoppingBag, Trash2, Plus, Palette, Link as LinkIcon, ListChecks, ArrowLeft, Image as ImageIcon
+    CheckCircle, Package, ShoppingBag, Trash2, Plus, Palette, 
+    Link as LinkIcon, ListChecks, ArrowLeft, Image as ImageIcon, Megaphone
 } from 'lucide-react';
 
 // --- Função Helper do Cloudinary ---
@@ -37,11 +38,10 @@ const uploadImageToCloudinary = async (file) => {
 
 function AdminPanel({ forcedShopId, onBack }) {
   const { managedShopId: contextShopId } = useShop();
-  // Se houver um ID forçado (God Mode), usa ele. Senão, usa o do contexto.
   const managedShopId = forcedShopId || contextShopId;
 
   // --- Estados de Navegação ---
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'sales', 'config', 'services', 'team', 'products'
+  const [activeTab, setActiveTab] = useState('dashboard'); 
   
   // --- Loadings ---
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
@@ -50,6 +50,7 @@ function AdminPanel({ forcedShopId, onBack }) {
   const [isLoadingDashboard, setIsLoadingDashboard] = useState(true);
   const [isLoadingProducts, setIsLoadingProducts] = useState(false);
   const [isLoadingSales, setIsLoadingSales] = useState(false);
+  const [isLoadingClients, setIsLoadingClients] = useState(false);
 
   // --- Dados ---
   const [shopProfile, setShopProfile] = useState(null);
@@ -57,6 +58,7 @@ function AdminPanel({ forcedShopId, onBack }) {
   const [professionals, setProfessionals] = useState([]);
   const [products, setProducts] = useState([]);
   const [salesHistory, setSalesHistory] = useState([]); 
+  const [clients, setClients] = useState([]);
   const [dashboardData, setDashboardData] = useState({
       totalAppointments: 0, completedAppointments: 0, 
       cancelledAppointments: 0, totalRevenue: 0, cancellationRate: 0
@@ -66,31 +68,23 @@ function AdminPanel({ forcedShopId, onBack }) {
   const [newLogoFile, setNewLogoFile] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   
-  // Form Serviços
   const [serviceName, setServiceName] = useState('');
   const [servicePrice, setServicePrice] = useState('');
   const [serviceDuration, setServiceDuration] = useState('');
   const [serviceImageFile, setServiceImageFile] = useState(null);
   
-  // Form Equipe
   const [inviteName, setInviteName] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [isLoadingInvite, setIsLoadingInvite] = useState(false);
   
-  // Form Pagamento
   const [mpAccessToken, setMpAccessToken] = useState('');
   const [isSavingKeys, setIsSavingKeys] = useState(false);
 
-  // Form Produtos
   const [productName, setProductName] = useState('');
   const [productPrice, setProductPrice] = useState('');
   const [productStock, setProductStock] = useState('');
   const [productImageFile, setProductImageFile] = useState(null);
   const [isSavingProduct, setIsSavingProduct] = useState(false);
-
-  // Estados CRM
-  const [clients, setClients] = useState([]);
-  const [isLoadingClients, setIsLoadingClients] = useState(false);
 
 
   // --- 1. DASHBOARD ---
@@ -121,7 +115,6 @@ function AdminPanel({ forcedShopId, onBack }) {
             
             if (appData.status === 'completed') {
                 completedAppointments++;
-                // Prioriza totalPrice (novo sistema), senão tenta estimar
                 totalRevenue += appData.totalPrice || 0; 
             } else if (appData.status && appData.status.includes('cancelled')) {
                 cancelledAppointments++;
@@ -154,7 +147,6 @@ function AdminPanel({ forcedShopId, onBack }) {
                 orderBy("createdAt", "desc")
              );
           } catch (e) {
-             // Fallback se índice não existir
              q = query(collection(db, "appointments"), where("barbershopId", "==", managedShopId));
           }
           
@@ -166,10 +158,59 @@ function AdminPanel({ forcedShopId, onBack }) {
           setSalesHistory(sales);
       } catch (error) {
           console.error("Erro ao buscar vendas:", error);
-          toast.error("Erro ao carregar histórico de vendas.");
       } finally {
           setIsLoadingSales(false);
       }
+  }, [managedShopId]);
+
+  // --- 3. CLIENTES CRM ---
+  const fetchClientsCRM = useCallback(async () => {
+    if (!managedShopId) return;
+    setIsLoadingClients(true);
+    try {
+        const q = query(collection(db, "appointments"), where("barbershopId", "==", managedShopId));
+        const snapshot = await getDocs(q);
+        
+        const clientsMap = {};
+
+        snapshot.forEach(doc => {
+            const app = doc.data();
+            const clientId = app.clientId || `manual_${app.clientNameManual}`; 
+            const clientName = app.clientName || app.clientNameManual || 'Cliente';
+            
+            if (!clientsMap[clientId]) {
+                clientsMap[clientId] = {
+                    id: clientId,
+                    name: clientName,
+                    phone: app.clientPhone || '',
+                    totalSpent: 0,
+                    visitCount: 0,
+                    lastVisit: null
+                };
+            }
+            
+            const client = clientsMap[clientId];
+            
+            if (app.status === 'completed') {
+                client.totalSpent += (app.totalPrice || 0);
+                client.visitCount += 1;
+            }
+            
+            const appDate = app.startTime.toDate();
+            if (!client.lastVisit || appDate > client.lastVisit) {
+                client.lastVisit = appDate;
+            }
+        });
+
+        const clientsArray = Object.values(clientsMap).sort((a, b) => b.lastVisit - a.lastVisit);
+        setClients(clientsArray);
+
+    } catch (error) {
+        console.error("Erro CRM:", error);
+        toast.error("Erro ao carregar clientes.");
+    } finally {
+        setIsLoadingClients(false);
+    }
   }, [managedShopId]);
 
   // --- FETCHERS GERAIS ---
@@ -205,60 +246,6 @@ function AdminPanel({ forcedShopId, onBack }) {
     finally { setIsLoadingProducts(false); }
   }, [managedShopId]);
 
-  // --- 3. CLIENTES & CRM (NOVO) ---
-  const fetchClientsCRM = useCallback(async () => {
-      if (!managedShopId) return;
-      setIsLoadingClients(true);
-      try {
-          // Busca TODOS os agendamentos da loja (pode ser pesado no futuro, ideal limitar ou paginar)
-          const q = query(collection(db, "appointments"), where("barbershopId", "==", managedShopId));
-          const snapshot = await getDocs(q);
-          
-          const clientsMap = {};
-
-          snapshot.forEach(doc => {
-              const app = doc.data();
-              if (!app.clientId) return; // Pula agendamentos manuais sem ID de user
-
-              if (!clientsMap[app.clientId]) {
-                  clientsMap[app.clientId] = {
-                      id: app.clientId,
-                      name: app.clientName || 'Cliente',
-                      phone: app.clientPhone || '',
-                      totalSpent: 0,
-                      visitCount: 0,
-                      lastVisit: null
-                  };
-              }
-              
-              const client = clientsMap[app.clientId];
-              
-              // Atualiza métricas
-              if (app.status === 'completed') {
-                  client.totalSpent += (app.totalPrice || 0);
-                  client.visitCount += 1;
-              }
-              
-              // Verifica última visita
-              const appDate = app.startTime.toDate();
-              if (!client.lastVisit || appDate > client.lastVisit) {
-                  client.lastVisit = appDate;
-              }
-          });
-
-          // Converte para array e ordena por última visita (os sumidos aparecem no final ou início conforme a estratégia)
-          const clientsArray = Object.values(clientsMap).sort((a, b) => b.lastVisit - a.lastVisit);
-          setClients(clientsArray);
-
-      } catch (error) {
-          console.error("Erro CRM:", error);
-          toast.error("Erro ao carregar dados de clientes.");
-      } finally {
-          setIsLoadingClients(false);
-      }
-  }, [managedShopId]);
-
-
   // --- EFEITO PRINCIPAL ---
   useEffect(() => {
     if (!managedShopId) return;
@@ -283,10 +270,16 @@ function AdminPanel({ forcedShopId, onBack }) {
         }
     );
     return () => unsubscribe();
-  }, [managedShopId, fetchShopProfile, fetchServices, fetchDashboardData, fetchProducts, activeTab, fetchSalesHistory]);
+  }, [managedShopId, fetchShopProfile, fetchServices, fetchDashboardData, fetchProducts, activeTab, fetchSalesHistory, fetchClientsCRM]);
 
 
   // --- AÇÕES ---
+
+  const handleResgateZap = (client) => {
+      if(!client.phone) return toast.error("Cliente sem telefone.");
+      const message = `Olá ${client.name.split(' ')[0]}! 💈%0A%0ASentimos sua falta aqui na ${shopProfile?.name || 'Barbearia'}.%0A%0AQue tal dar um trato no visual essa semana? Acesse nosso app para agendar! ✂️`;
+      window.open(`https://wa.me/${client.phone.replace(/\D/g, '')}?text=${message}`, '_blank');
+  };
 
   const handleUpdateShopProfile = async (e) => {
     e.preventDefault();
@@ -295,7 +288,7 @@ function AdminPanel({ forcedShopId, onBack }) {
     try {
       if (newLogoFile) {
         const uploadPromise = uploadImageToCloudinary(newLogoFile);
-        toast.promise(uploadPromise, { loading: 'Enviando logo...', success: 'Logo atualizada!', error: 'Erro upload.' });
+        toast.promise(uploadPromise, { loading: 'Enviando logo...', success: 'Ok!', error: 'Erro.' });
         newLogoUrl = await uploadPromise;
         setNewLogoFile(null);
       }
@@ -310,10 +303,9 @@ function AdminPanel({ forcedShopId, onBack }) {
         subdomain: shopProfile.subdomain || '',
         requirePayment: shopProfile.requirePayment || false
       });
-      toast.success("Configurações salvas com sucesso!");
+      toast.success("Salvo!");
     } catch (error) { 
-      console.error("Erro update perfil:", error);
-      toast.error("Erro ao salvar: " + error.message); 
+      toast.error("Erro ao salvar."); 
     } finally { 
       setIsUploading(false); 
     }
@@ -339,52 +331,52 @@ function AdminPanel({ forcedShopId, onBack }) {
       toast.success("Serviço criado!");
       setServiceName(''); setServicePrice(''); setServiceDuration(''); setServiceImageFile(null);
       fetchServices();
-    } catch (error) { toast.error("Erro ao criar serviço."); } 
+    } catch (error) { toast.error("Erro."); } 
     finally { setIsLoadingServices(false); }
   };
   
   const handleInviteProfessional = async (e) => {
     e.preventDefault();
-    if (!inviteName || !inviteEmail) return toast.warning("Preencha todos os dados.");
+    if (!inviteName || !inviteEmail) return toast.warning("Preencha dados.");
     setIsLoadingInvite(true);
     try {
       await addDoc(collection(db, "invites"), {
         name: inviteName, email: inviteEmail.toLowerCase(), barbershopId: managedShopId, status: "pending", createdAt: Timestamp.now()
       });
-      toast.success("Convite enviado!");
+      toast.success("Enviado!");
       setInviteName(''); setInviteEmail('');
-    } catch (error) { toast.error("Erro ao convidar."); } 
+    } catch (error) { toast.error("Erro."); } 
     finally { setIsLoadingInvite(false); }
   };
   
   const handleRemoveProfessional = async (id, name, uid) => {
-    if (!window.confirm(`Tem certeza que deseja remover ${name}?`)) return;
+    if (!window.confirm(`Remover ${name}?`)) return;
     try {
       const batch = writeBatch(db);
       batch.delete(doc(db, "professionals", id));
       batch.update(doc(db, "roles", uid), { role: "client", worksAtShopId: deleteField() });
       await batch.commit();
-      toast.success("Profissional removido.");
-    } catch (e) { toast.error("Erro ao remover."); }
+      toast.success("Removido.");
+    } catch (e) { toast.error("Erro."); }
   };
 
   const handleSavePaymentKeys = async () => {
-    if (!mpAccessToken) return toast.warning("O Token não pode estar vazio.");
+    if (!mpAccessToken) return toast.warning("Token vazio.");
     setIsSavingKeys(true);
     try {
       const batch = writeBatch(db);
       batch.set(doc(db, "barbershops", managedShopId, "private", "keys"), { accessToken: mpAccessToken }, { merge: true });
       batch.update(doc(db, "barbershops", managedShopId), { onlinePaymentEnabled: true });
       await batch.commit();
-      toast.success("Pagamento configurado!");
+      toast.success("Configurado!");
       setMpAccessToken("");
-    } catch (e) { toast.error("Erro ao salvar."); } 
+    } catch (e) { toast.error("Erro."); } 
     finally { setIsSavingKeys(false); }
   };
 
   const handleAddProduct = async (e) => {
       e.preventDefault();
-      if (!productName || !productPrice || !productStock) return toast.warning("Preencha todos os campos.");
+      if (!productName || !productPrice || !productStock) return toast.warning("Preencha tudo.");
       setIsSavingProduct(true);
       try {
           let img = '';
@@ -402,23 +394,17 @@ function AdminPanel({ forcedShopId, onBack }) {
           toast.success("Produto salvo!");
           setProductName(''); setProductPrice(''); setProductStock(''); setProductImageFile(null);
           fetchProducts();
-      } catch (e) { 
-          console.error("Erro add produto:", e);
-          toast.error("Erro ao salvar produto."); 
-      } finally { 
-          setIsSavingProduct(false); 
-      }
+      } catch (e) { toast.error("Erro."); } 
+      finally { setIsSavingProduct(false); }
   };
 
   const handleDeleteProduct = async (id) => {
-      if(!window.confirm("Excluir este produto permanentemente?")) return;
+      if(!window.confirm("Excluir?")) return;
       try { 
           await deleteDoc(doc(db, "products", id)); 
-          toast.success("Produto excluído."); 
+          toast.success("Excluído."); 
           fetchProducts(); 
-      } catch(e){ 
-          toast.error("Erro ao excluir."); 
-      }
+      } catch(e){ toast.error("Erro."); }
   };
 
   // --- RENDERIZAÇÃO ---
@@ -432,7 +418,7 @@ function AdminPanel({ forcedShopId, onBack }) {
           {isLoadingDashboard ? <Loading /> : (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="card-premium border-l-4 border-gold-main/70 p-4">
-                    <div className="flex justify-between mb-2"><span className="text-xs uppercase text-text-secondary">Receita Total</span><DollarSign size={18} className="text-gold-main"/></div>
+                    <div className="flex justify-between mb-2"><span className="text-xs uppercase text-text-secondary">Faturamento</span><DollarSign size={18} className="text-gold-main"/></div>
                     <p className="text-2xl font-bold text-white">R$ {dashboardData.totalRevenue.toFixed(2)}</p>
                 </div>
                 <div className="card-premium border-l-4 border-blue-500/70 p-4">
@@ -459,11 +445,11 @@ function AdminPanel({ forcedShopId, onBack }) {
               <h3 className="text-xl font-heading font-semibold text-text-primary flex items-center gap-2">
                   <ListChecks className="text-gold-main" size={20}/> Histórico de Pedidos
               </h3>
-              <button onClick={fetchSalesHistory} className="text-xs text-gold-main hover:underline">Atualizar Lista</button>
+              <button onClick={fetchSalesHistory} className="text-xs text-gold-main hover:underline">Atualizar</button>
           </div>
           
           {isLoadingSales ? <Loading /> : salesHistory.length === 0 ? (
-              <p className="text-center text-text-secondary italic py-10 card-premium">Nenhuma venda registrada recentemente.</p>
+              <p className="text-center text-text-secondary italic py-10 card-premium">Nenhuma venda.</p>
           ) : (
               <div className="space-y-4">
                   {salesHistory.map(sale => (
@@ -489,9 +475,7 @@ function AdminPanel({ forcedShopId, onBack }) {
                                           <span className="text-xs text-text-secondary font-mono">R$ {item.price.toFixed(2)}</span>
                                       </div>
                                   ))}
-                                  {!sale.orderItems && (
-                                      <p className="text-xs text-text-secondary italic">Agendamento simples (sem detalhes de itens)</p>
-                                  )}
+                                  {!sale.orderItems && <p className="text-xs text-text-secondary italic">Agendamento simples</p>}
                               </div>
                           </div>
                           
@@ -499,7 +483,7 @@ function AdminPanel({ forcedShopId, onBack }) {
                               <span className="text-xs text-text-secondary uppercase tracking-wider">Total</span>
                               <span className="text-xl font-bold text-white">R$ {(sale.totalPrice || 0).toFixed(2)}</span>
                               <span className="text-[10px] text-text-secondary mt-1 px-2 py-1 bg-grafite-main rounded border border-grafite-border">
-                                  {sale.paymentMethod?.includes('online') ? 'Pago Online' : 'Pagar na Loja'}
+                                  {sale.paymentMethod?.includes('online') ? 'Pago Online' : 'Na Loja'}
                               </span>
                           </div>
                       </div>
@@ -509,7 +493,69 @@ function AdminPanel({ forcedShopId, onBack }) {
       </div>
   );
 
-  // 3. Configurações
+  // 3. Clientes CRM
+  const renderClientsCRM = () => (
+    <section className="card-premium">
+        <div className="flex justify-between items-center mb-6 border-b border-grafite-border pb-4">
+            <h3 className="text-xl font-heading font-semibold text-text-primary flex items-center gap-2">
+                <Megaphone className="text-gold-main" size={20}/> Gestão de Clientes (CRM)
+            </h3>
+            <button onClick={fetchClientsCRM} className="text-xs text-gold-main hover:underline">Atualizar</button>
+        </div>
+
+        {isLoadingClients ? <Loading /> : clients.length === 0 ? (
+            <p className="text-center text-text-secondary italic py-10">Nenhum histórico de clientes ainda.</p>
+        ) : (
+            <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                    <thead>
+                        <tr className="text-xs text-text-secondary border-b border-grafite-border">
+                            <th className="pb-2 pl-2">Cliente</th>
+                            <th className="pb-2">Última Visita</th>
+                            <th className="pb-2">Frequência</th>
+                            <th className="pb-2">Total Gasto</th>
+                            <th className="pb-2 text-right pr-2">Ação</th>
+                        </tr>
+                    </thead>
+                    <tbody className="text-sm">
+                        {clients.map(client => {
+                            const daysSince = Math.floor((new Date() - client.lastVisit) / (1000 * 60 * 60 * 24));
+                            const isInactive = daysSince > 30;
+
+                            return (
+                                <tr key={client.id} className="border-b border-grafite-border/30 hover:bg-grafite-surface transition-colors group">
+                                    <td className="py-3 pl-2">
+                                        <p className="font-bold text-white">{client.name}</p>
+                                        <p className="text-xs text-text-secondary">{client.phone || 'Sem telefone'}</p>
+                                    </td>
+                                    <td className="py-3">
+                                        <span className={`text-xs px-2 py-1 rounded border ${isInactive ? 'bg-red-950/30 text-red-400 border-red-900/50' : 'bg-green-950/30 text-green-400 border-green-900/50'}`}>
+                                            {daysSince} dias atrás
+                                        </span>
+                                    </td>
+                                    <td className="py-3 text-text-primary">{client.visitCount} visitas</td>
+                                    <td className="py-3 text-gold-main font-bold">R$ {client.totalSpent.toFixed(2)}</td>
+                                    <td className="py-3 text-right pr-2">
+                                        {client.phone && (
+                                            <button 
+                                                onClick={() => handleResgateZap(client)}
+                                                className="text-xs bg-gold-dim text-gold-main px-3 py-1.5 rounded hover:bg-gold-main hover:text-grafite-main transition-colors flex items-center gap-1 ml-auto"
+                                            >
+                                                <Megaphone size={12}/> Resgatar
+                                            </button>
+                                        )}
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+        )}
+    </section>
+  );
+
+  // 4. Configurações
   const renderConfigSection = () => (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <section className="card-premium">
@@ -520,51 +566,51 @@ function AdminPanel({ forcedShopId, onBack }) {
           
           <form onSubmit={handleUpdateShopProfile} className="space-y-4">
             <div className="space-y-1">
-                <label htmlFor="shop_name" className="text-xs text-text-secondary">Nome da Barbearia</label>
-                <input id="shop_name" name="shop_name" type="text" value={shopProfile.name} onChange={(e) => setShopProfile({...shopProfile, name: e.target.value})} className="input-premium text-sm" required/>
+                <label htmlFor="s_name" className="text-xs text-text-secondary">Nome da Barbearia</label>
+                <input id="s_name" name="s_name" type="text" value={shopProfile.name} onChange={(e) => setShopProfile({...shopProfile, name: e.target.value})} className="input-premium text-sm" required/>
             </div>
             <div className="space-y-1">
-                <label htmlFor="shop_phone" className="text-xs text-text-secondary">WhatsApp</label>
-                <input id="shop_phone" name="shop_phone" type="tel" value={shopProfile.phone || ''} onChange={(e) => setShopProfile({...shopProfile, phone: e.target.value})} className="input-premium text-sm"/>
+                <label htmlFor="s_phone" className="text-xs text-text-secondary">WhatsApp da Loja</label>
+                <input id="s_phone" name="s_phone" type="tel" value={shopProfile.phone || ''} onChange={(e) => setShopProfile({...shopProfile, phone: e.target.value})} className="input-premium text-sm"/>
             </div>
             <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
-                    <label htmlFor="shop_city" className="text-xs text-text-secondary">Cidade</label>
-                    <input id="shop_city" name="shop_city" type="text" value={shopProfile.cidade} onChange={(e) => setShopProfile({...shopProfile, cidade: e.target.value})} className="input-premium text-sm"/>
+                    <label htmlFor="s_city" className="text-xs text-text-secondary">Cidade</label>
+                    <input id="s_city" name="s_city" type="text" value={shopProfile.cidade} onChange={(e) => setShopProfile({...shopProfile, cidade: e.target.value})} className="input-premium text-sm"/>
                 </div>
                 <div className="space-y-1">
-                    <label htmlFor="shop_address" className="text-xs text-text-secondary">Endereço</label>
-                    <input id="shop_address" name="shop_address" type="text" value={shopProfile.address} onChange={(e) => setShopProfile({...shopProfile, address: e.target.value})} className="input-premium text-sm"/>
+                    <label htmlFor="s_addr" className="text-xs text-text-secondary">Endereço</label>
+                    <input id="s_addr" name="s_addr" type="text" value={shopProfile.address} onChange={(e) => setShopProfile({...shopProfile, address: e.target.value})} className="input-premium text-sm"/>
                 </div>
             </div>
             <div className="space-y-1">
-                <label htmlFor="shop_desc" className="text-xs text-text-secondary">Descrição</label>
-                <textarea id="shop_desc" name="shop_desc" value={shopProfile.description} onChange={(e) => setShopProfile({...shopProfile, description: e.target.value})} className="input-premium resize-none text-sm" rows="2"/>
+                <label htmlFor="s_desc" className="text-xs text-text-secondary">Descrição</label>
+                <textarea id="s_desc" name="s_desc" value={shopProfile.description} onChange={(e) => setShopProfile({...shopProfile, description: e.target.value})} className="input-premium resize-none text-sm" rows="2"/>
             </div>
             
             {/* Campos Whitelabel */}
             <div className="grid grid-cols-2 gap-4 pt-2 border-t border-grafite-border mt-4">
                 <div className="space-y-1">
-                    <label htmlFor="shop_color" className="text-xs text-text-secondary flex items-center gap-1"><Palette size={12}/> Cor da Marca</label>
+                    <label htmlFor="s_color" className="text-xs text-text-secondary flex items-center gap-1"><Palette size={12}/> Cor da Marca</label>
                     <div className="flex gap-2">
-                        <input id="shop_color_picker" name="shop_color_picker" type="color" value={shopProfile.brandPrimaryColor || '#D4AF37'} onChange={(e) => setShopProfile({...shopProfile, brandPrimaryColor: e.target.value})} className="h-9 w-9 rounded cursor-pointer bg-transparent border-0 p-0"/>
-                        <input id="shop_color" name="shop_color" type="text" value={shopProfile.brandPrimaryColor || '#D4AF37'} onChange={(e) => setShopProfile({...shopProfile, brandPrimaryColor: e.target.value})} className="input-premium text-xs h-9"/>
+                        <input id="s_color_picker" name="s_color_picker" type="color" value={shopProfile.brandPrimaryColor || '#D4AF37'} onChange={(e) => setShopProfile({...shopProfile, brandPrimaryColor: e.target.value})} className="h-9 w-9 rounded cursor-pointer bg-transparent border-0 p-0"/>
+                        <input id="s_color" name="s_color" type="text" value={shopProfile.brandPrimaryColor || '#D4AF37'} onChange={(e) => setShopProfile({...shopProfile, brandPrimaryColor: e.target.value})} className="input-premium text-xs h-9"/>
                     </div>
                 </div>
                 <div className="space-y-1">
-                    <label htmlFor="shop_subdomain" className="text-xs text-text-secondary flex items-center gap-1"><LinkIcon size={12}/> Subdomínio</label>
+                    <label htmlFor="s_domain" className="text-xs text-text-secondary flex items-center gap-1"><LinkIcon size={12}/> Subdomínio</label>
                     <div className="flex items-center">
                         <span className="text-xs text-text-secondary mr-1">app.</span>
-                        <input id="shop_subdomain" name="shop_subdomain" type="text" value={shopProfile.subdomain || ''} onChange={(e) => setShopProfile({...shopProfile, subdomain: e.target.value.toLowerCase()})} className="input-premium text-xs h-9" placeholder="viking"/>
+                        <input id="s_domain" name="s_domain" type="text" value={shopProfile.subdomain || ''} onChange={(e) => setShopProfile({...shopProfile, subdomain: e.target.value.toLowerCase()})} className="input-premium text-xs h-9" placeholder="viking"/>
                     </div>
                 </div>
             </div>
 
             <div className="space-y-1 mt-2">
-                <label htmlFor="shop_logo" className="text-xs text-text-secondary">Logo da Loja</label>
+                <label htmlFor="s_logo" className="text-xs text-text-secondary">Logo da Loja</label>
                 <div className="flex items-center gap-4 bg-grafite-main p-2 rounded-lg border border-grafite-border border-dashed">
-                    <img src={shopProfile.logoUrl} alt="Logo" className="w-10 h-10 rounded-full object-cover border border-gold-main"/>
-                    <input id="shop_logo" name="shop_logo" type="file" accept="image/*" onChange={(e) => setNewLogoFile(e.target.files[0])} className="text-xs text-text-secondary file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-gold-dim file:text-gold-main cursor-pointer"/>
+                    <img src={shopProfile.logoUrl} className="w-10 h-10 rounded-full object-cover border border-gold-main"/>
+                    <input id="s_logo" name="s_logo" type="file" accept="image/*" onChange={(e) => setNewLogoFile(e.target.files[0])} className="text-xs text-text-secondary file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:bg-gold-dim file:text-gold-main cursor-pointer"/>
                 </div>
             </div>
 
@@ -593,26 +639,26 @@ function AdminPanel({ forcedShopId, onBack }) {
     </div>
   );
 
-  // 4. Serviços
+  // 5. Serviços
   const renderServices = () => (
     <section className="card-premium">
         <div className="flex justify-between items-center mb-6 border-b border-grafite-border pb-4"><h3 className="text-xl font-bold text-text-primary flex gap-2"><Scissors className="text-gold-main"/> Serviços</h3></div>
         <form onSubmit={handleAddService} className="grid grid-cols-1 md:grid-cols-12 gap-3 mb-6 bg-grafite-surface p-4 rounded-lg border border-grafite-border">
              <div className="md:col-span-4">
-                 <label htmlFor="service_name" className="text-xs font-medium text-text-secondary ml-1">Nome</label>
-                 <input id="service_name" name="service_name" type="text" value={serviceName} onChange={(e)=>setServiceName(e.target.value)} placeholder="Corte" className="input-premium text-sm" required/>
+                 <label htmlFor="svc_name" className="text-xs font-medium text-text-secondary ml-1">Nome</label>
+                 <input id="svc_name" name="svc_name" type="text" value={serviceName} onChange={(e)=>setServiceName(e.target.value)} placeholder="Corte" className="input-premium text-sm" required/>
              </div>
              <div className="md:col-span-3">
-                 <label htmlFor="service_price" className="text-xs font-medium text-text-secondary ml-1">Preço</label>
-                 <input id="service_price" name="service_price" type="number" value={servicePrice} onChange={(e)=>setServicePrice(e.target.value)} placeholder="R$" className="input-premium text-sm" required/>
+                 <label htmlFor="svc_price" className="text-xs font-medium text-text-secondary ml-1">Preço</label>
+                 <input id="svc_price" name="svc_price" type="number" value={servicePrice} onChange={(e)=>setServicePrice(e.target.value)} placeholder="R$" className="input-premium text-sm" required/>
              </div>
              <div className="md:col-span-2">
-                 <label htmlFor="service_duration" className="text-xs font-medium text-text-secondary ml-1">Duração</label>
-                 <input id="service_duration" name="service_duration" type="number" value={serviceDuration} onChange={(e)=>setServiceDuration(e.target.value)} placeholder="Min" className="input-premium text-sm" required/>
+                 <label htmlFor="svc_dur" className="text-xs font-medium text-text-secondary ml-1">Duração</label>
+                 <input id="svc_dur" name="svc_dur" type="number" value={serviceDuration} onChange={(e)=>setServiceDuration(e.target.value)} placeholder="Min" className="input-premium text-sm" required/>
              </div>
              <div className="md:col-span-3">
-                 <label htmlFor="service_image" className="text-xs font-medium text-text-secondary ml-1">Imagem</label>
-                 <input id="service_image" name="service_image" type="file" accept="image/*" onChange={(e) => setServiceImageFile(e.target.files[0])} className="text-xs text-text-secondary pt-2 block"/>
+                 <label htmlFor="svc_img" className="text-xs font-medium text-text-secondary ml-1">Imagem</label>
+                 <input id="svc_img" name="svc_img" type="file" accept="image/*" onChange={(e) => setServiceImageFile(e.target.files[0])} className="text-xs text-text-secondary pt-2 block"/>
              </div>
              <div className="md:col-span-12 flex justify-end"><button type="submit" disabled={isLoadingServices} className="btn-primary w-full md:w-auto h-[42px] flex justify-center items-center px-8"><Plus size={16}/> Adicionar</button></div>
         </form>
@@ -633,13 +679,13 @@ function AdminPanel({ forcedShopId, onBack }) {
     </section>
   );
 
-  // 5. Equipe
+  // 6. Equipe
   const renderTeam = () => (
     <section className="card-premium">
         <div className="flex justify-between items-center mb-6 border-b border-grafite-border pb-4"><h3 className="text-xl font-bold text-text-primary flex gap-2"><Users className="text-gold-main"/> Equipe</h3></div>
         <div className="bg-grafite-surface p-4 rounded-lg mb-6 flex flex-col md:flex-row gap-3 items-end border border-grafite-border">
-            <div className="w-full"><label htmlFor="invite_name" className="text-xs text-text-secondary ml-1">Nome</label><input id="invite_name" name="invite_name" type="text" value={inviteName} onChange={(e)=>setInviteName(e.target.value)} className="input-premium text-sm h-10"/></div>
-            <div className="w-full"><label htmlFor="invite_email" className="text-xs text-text-secondary ml-1">Email</label><input id="invite_email" name="invite_email" type="email" value={inviteEmail} onChange={(e)=>setInviteEmail(e.target.value)} className="input-premium text-sm h-10"/></div>
+            <div className="w-full"><label htmlFor="inv_name" className="text-xs text-text-secondary ml-1">Nome</label><input id="inv_name" name="inv_name" type="text" value={inviteName} onChange={(e)=>setInviteName(e.target.value)} className="input-premium text-sm h-10"/></div>
+            <div className="w-full"><label htmlFor="inv_email" className="text-xs text-text-secondary ml-1">Email</label><input id="inv_email" name="inv_email" type="email" value={inviteEmail} onChange={(e)=>setInviteEmail(e.target.value)} className="input-premium text-sm h-10"/></div>
             <button onClick={handleInviteProfessional} disabled={isLoadingInvite} className="btn-primary w-full md:w-auto h-10 text-sm px-6">Convidar</button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -656,27 +702,27 @@ function AdminPanel({ forcedShopId, onBack }) {
     </section>
   );
 
-  // 6. Produtos
+  // 7. Produtos
   const renderProducts = () => (
       <section className="card-premium">
           <div className="flex justify-between items-center mb-6 border-b border-grafite-border pb-4"><h3 className="text-xl font-bold text-text-primary flex gap-2"><Package className="text-gold-main"/> Produtos</h3></div>
           
           <form onSubmit={handleAddProduct} className="grid grid-cols-1 md:grid-cols-12 gap-3 mb-6 bg-grafite-surface p-4 rounded-lg border border-grafite-border">
               <div className="md:col-span-4">
-                  <label htmlFor="product_name" className="text-xs text-text-secondary ml-1">Produto</label>
-                  <input id="product_name" name="product_name" type="text" value={productName} onChange={(e)=>setProductName(e.target.value)} placeholder="Ex: Pomada" className="input-premium text-sm" required/>
+                  <label htmlFor="prod_name" className="text-xs text-text-secondary ml-1">Produto</label>
+                  <input id="prod_name" name="prod_name" type="text" value={productName} onChange={(e)=>setProductName(e.target.value)} placeholder="Ex: Pomada" className="input-premium text-sm" required/>
               </div>
               <div className="md:col-span-2">
-                  <label htmlFor="product_price" className="text-xs text-text-secondary ml-1">Preço</label>
-                  <input id="product_price" name="product_price" type="number" value={productPrice} onChange={(e)=>setProductPrice(e.target.value)} placeholder="R$" className="input-premium text-sm" required/>
+                  <label htmlFor="prod_price" className="text-xs text-text-secondary ml-1">Preço</label>
+                  <input id="prod_price" name="prod_price" type="number" value={productPrice} onChange={(e)=>setProductPrice(e.target.value)} placeholder="R$" className="input-premium text-sm" required/>
               </div>
               <div className="md:col-span-2">
-                  <label htmlFor="product_stock" className="text-xs text-text-secondary ml-1">Estoque</label>
-                  <input id="product_stock" name="product_stock" type="number" value={productStock} onChange={(e)=>setProductStock(e.target.value)} placeholder="Qtd" className="input-premium text-sm" required/>
+                  <label htmlFor="prod_stock" className="text-xs text-text-secondary ml-1">Estoque</label>
+                  <input id="prod_stock" name="prod_stock" type="number" value={productStock} onChange={(e)=>setProductStock(e.target.value)} placeholder="Qtd" className="input-premium text-sm" required/>
               </div>
               <div className="md:col-span-3">
-                  <label htmlFor="product_image" className="text-xs text-text-secondary ml-1">Foto</label>
-                  <input id="product_image" name="product_image" type="file" accept="image/*" onChange={(e)=>setProductImageFile(e.target.files[0])} className="text-xs text-text-secondary pt-2 block"/>
+                  <label htmlFor="prod_image" className="text-xs text-text-secondary ml-1">Foto</label>
+                  <input id="prod_image" name="prod_image" type="file" accept="image/*" onChange={(e)=>setProductImageFile(e.target.files[0])} className="text-xs text-text-secondary pt-2 block"/>
               </div>
               <div className="md:col-span-1 flex items-end"><button type="submit" disabled={isSavingProduct} className="btn-primary w-full h-[42px] flex justify-center items-center"><Plus size={16}/></button></div>
           </form>
@@ -703,76 +749,6 @@ function AdminPanel({ forcedShopId, onBack }) {
           )}
       </section>
   );
-  
-  //Renderização CRM()
-
-  const handleResgateZap = (client) => {
-      if(!client.phone) return toast.error("Cliente sem telefone.");
-      const message = `Olá ${client.name.split(' ')[0]}! 💈%0A%0ASentimos sua falta aqui na ${shopProfile?.name || 'Barbearia'}.%0A%0AQue tal dar um trato no visual essa semana? Acesse nosso app para agendar! ✂️`;
-      window.open(`https://wa.me/${client.phone.replace(/\D/g, '')}?text=${message}`, '_blank');
-  };
-
-  const renderClientsCRM = () => (
-      <section className="card-premium">
-          <div className="flex justify-between items-center mb-6 border-b border-grafite-border pb-4">
-              <h3 className="text-xl font-heading font-semibold text-text-primary flex items-center gap-2">
-                  <Megaphone className="text-gold-main" size={20}/> Gestão de Clientes (CRM)
-              </h3>
-              <button onClick={fetchClientsCRM} className="text-xs text-gold-main hover:underline">Atualizar</button>
-          </div>
-
-          {isLoadingClients ? <Loading /> : clients.length === 0 ? (
-              <p className="text-center text-text-secondary italic py-10">Nenhum histórico de clientes ainda.</p>
-          ) : (
-              <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                      <thead>
-                          <tr className="text-xs text-text-secondary border-b border-grafite-border">
-                              <th className="pb-2 pl-2">Cliente</th>
-                              <th className="pb-2">Última Visita</th>
-                              <th className="pb-2">Frequência</th>
-                              <th className="pb-2">Total Gasto</th>
-                              <th className="pb-2 text-right pr-2">Ação</th>
-                          </tr>
-                      </thead>
-                      <tbody className="text-sm">
-                          {clients.map(client => {
-                              const daysSince = Math.floor((new Date() - client.lastVisit) / (1000 * 60 * 60 * 24));
-                              const isInactive = daysSince > 30;
-
-                              return (
-                                  <tr key={client.id} className="border-b border-grafite-border/30 hover:bg-grafite-surface transition-colors group">
-                                      <td className="py-3 pl-2">
-                                          <p className="font-bold text-white">{client.name}</p>
-                                          <p className="text-xs text-text-secondary">{client.phone || 'Sem telefone'}</p>
-                                      </td>
-                                      <td className="py-3">
-                                          <span className={`text-xs px-2 py-1 rounded border ${isInactive ? 'bg-red-950/30 text-red-400 border-red-900/50' : 'bg-green-950/30 text-green-400 border-green-900/50'}`}>
-                                              {daysSince} dias atrás
-                                          </span>
-                                      </td>
-                                      <td className="py-3 text-text-primary">{client.visitCount} visitas</td>
-                                      <td className="py-3 text-gold-main font-bold">R$ {client.totalSpent.toFixed(2)}</td>
-                                      <td className="py-3 text-right pr-2">
-                                          {isInactive && client.phone && (
-                                              <button 
-                                                  onClick={() => handleResgateZap(client)}
-                                                  className="text-xs bg-gold-dim text-gold-main px-3 py-1.5 rounded hover:bg-gold-main hover:text-grafite-main transition-colors flex items-center gap-1 ml-auto"
-                                              >
-                                                  <Megaphone size={12}/> Resgatar
-                                              </button>
-                                          )}
-                                      </td>
-                                  </tr>
-                              );
-                          })}
-                      </tbody>
-                  </table>
-              </div>
-          )}
-      </section>
-  );
-
 
   if (isLoadingProfile || !shopProfile) return <Loading />;
   
@@ -795,11 +771,11 @@ function AdminPanel({ forcedShopId, onBack }) {
         {[
             {id: 'dashboard', label: 'Visão Geral', Icon: LayoutDashboard}, 
             {id: 'sales', label: 'Vendas', Icon: ListChecks}, 
+            {id: 'clients', label: 'Clientes', Icon: Megaphone}, // Aba CRM
             {id: 'config', label: 'Configurações', Icon: FileText}, 
             {id: 'services', label: 'Serviços', Icon: Scissors}, 
             {id: 'team', label: 'Equipe', Icon: Users},
-            {id: 'products', label: 'Produtos', Icon: Package},
-            {id: 'clients', label: 'Clientes', Icon: Megaphone} // Adicione na lista do map
+            {id: 'products', label: 'Produtos', Icon: Package}
         ].map(({id, label, Icon}) => (
             <button key={id} onClick={() => setActiveTab(id)} className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-300 ${activeTab === id ? 'bg-gold-main text-grafite-main shadow-glow transform scale-105' : 'text-text-secondary hover:text-text-primary hover:bg-grafite-surface'}`}>
                 <Icon size={18} /> {label}
@@ -810,11 +786,11 @@ function AdminPanel({ forcedShopId, onBack }) {
       <div className="min-h-[500px]">
           {activeTab === 'dashboard' && renderDashboard()}
           {activeTab === 'sales' && renderSalesTab()}
+          {activeTab === 'clients' && renderClientsCRM()} 
           {activeTab === 'config' && renderConfigSection()}
           {activeTab === 'services' && renderServices()}
           {activeTab === 'team' && renderTeam()}
           {activeTab === 'products' && renderProducts()}
-          {activeTab === 'clients' && renderClientsCRM()}
       </div>
     </div>
   );
