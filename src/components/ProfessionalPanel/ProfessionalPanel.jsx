@@ -11,7 +11,7 @@ import {
 import { useShop } from '../../App.jsx';
 import { toast } from 'sonner'; 
 import { 
-    Calendar, Clock, Scissors, Ban, CheckCircle, XCircle, User, Plus, UserPlus, 
+    Calendar, Megaphone, Clock, Scissors, Ban, CheckCircle, XCircle, User, Plus, UserPlus, 
     Zap, DollarSign, TrendingUp, TrendingDown, ClipboardCheck, FileText, Package, Minus, ShoppingBag, MessageCircle
 } from 'lucide-react';
 
@@ -29,7 +29,11 @@ function ProfessionalPanel() {
   const professionalId = auth.currentUser ? auth.currentUser.uid : null;
 
   // --- Estados de Navegação ---
-  const [activeTab, setActiveTab] = useState('agenda'); 
+  const [activeTab, setActiveTab] = useState('agenda');
+
+  // ... CRM ...
+  const [isLoadingClients, setIsLoadingClients] = useState(false);
+  const [clients, setClients] = useState([]);
   
   // --- Loadings ---
   const [isLoadingHours, setIsLoadingHours] = useState(true);
@@ -40,7 +44,7 @@ function ProfessionalPanel() {
   const [isLoadingProducts, setIsLoadingProducts] = useState(false); 
 
   // --- Dados Principais ---
-  const [shopData, setShopData] = useState(null); // CORREÇÃO: Armazena nome e endereço da loja
+  const [shopData, setShopData] = useState(null);
   const [allServices, setAllServices] = useState([]); 
   const [products, setProducts] = useState([]); 
   const [myServiceIds, setMyServiceIds] = useState(new Set()); 
@@ -174,6 +178,57 @@ function ProfessionalPanel() {
     finally { setIsLoadingPerformance(false); }
   }, [professionalId]);
 
+  // --- BUSCA CLIENTES (CRM) ---
+  const fetchClientsCRM = useCallback(async () => {
+    if (!managedShopId) return;
+    setIsLoadingClients(true);
+    try {
+        // Busca todos os agendamentos da loja para montar o CRM
+        const q = query(collection(db, "appointments"), where("barbershopId", "==", managedShopId));
+        const snapshot = await getDocs(q);
+        
+        const clientsMap = {};
+
+        snapshot.forEach(doc => {
+            const app = doc.data();
+            const clientId = app.clientId || `manual_${app.clientNameManual}`; 
+            const clientName = app.clientName || app.clientNameManual || 'Cliente';
+            
+            if (!clientsMap[clientId]) {
+                clientsMap[clientId] = {
+                    id: clientId,
+                    name: clientName,
+                    phone: app.clientPhone || '',
+                    totalSpent: 0,
+                    visitCount: 0,
+                    lastVisit: null
+                };
+            }
+            
+            const client = clientsMap[clientId];
+            
+            if (app.status === 'completed') {
+                client.totalSpent += (app.totalPrice || 0);
+                client.visitCount += 1;
+            }
+            
+            const appDate = app.startTime.toDate();
+            if (!client.lastVisit || appDate > client.lastVisit) {
+                client.lastVisit = appDate;
+            }
+        });
+
+        const clientsArray = Object.values(clientsMap).sort((a, b) => b.lastVisit - a.lastVisit);
+        setClients(clientsArray);
+
+    } catch (error) {
+        console.error("Erro CRM:", error);
+        toast.error("Erro ao carregar clientes.");
+    } finally {
+        setIsLoadingClients(false);
+    }
+  }, [managedShopId]);
+
   // --- EFEITO PRINCIPAL ---
   useEffect(() => {
     if (!managedShopId || !professionalId) return;
@@ -231,16 +286,17 @@ function ProfessionalPanel() {
     });
 
     if (activeTab === 'performance') fetchPerformanceData();
+    if (activeTab === 'clients') fetchClientsCRM();
 
     return () => {
       if (unsubscribeBlocks && typeof unsubscribeBlocks === 'function') unsubscribeBlocks();
       unsubscribeAgenda();
     };
-  }, [managedShopId, professionalId, activeTab, fetchWorkingHours, fetchAllServices, fetchMyServices, fetchBlockedTimes, fetchPerformanceData, fetchProducts]);
+  }, [managedShopId, professionalId, activeTab, fetchWorkingHours, fetchAllServices, fetchMyServices, fetchBlockedTimes, fetchPerformanceData, fetchProducts, fetchClientsCRM]);
   
   // --- AÇÕES ---
 
-  // CORREÇÃO: Usa shopData em vez de shopProfile
+  // Usa shopData em vez de shopProfile
   const handleSendWhatsapp = (app) => {
       const phone = app.clientPhone;
       if (!phone) {
@@ -255,7 +311,7 @@ function ProfessionalPanel() {
       const total = app.totalPrice ? `R$ ${app.totalPrice.toFixed(2)}` : '';
       
       let message = `Olá, *${clientName}*! Tudo bem? 👋%0A%0A`;
-      message += `Aqui é da *${shopData?.name || 'Barbearia'}*.%0A`; // Usa shopData.name
+      message += `Aqui é da *${shopData?.name || 'Barbearia'}*.%0A`;
       message += `Passando para confirmar seu horário:%0A%0A`;
       message += `🗓 *${date}*%0A`;
       message += `⏰ *${time}*%0A`;
@@ -263,11 +319,11 @@ function ProfessionalPanel() {
       
       if (total) message += `%0A💰 Valor: *${total}*`;
       
-      if (shopData?.address) message += `%0A%0A📍 ${shopData.address}`; // Usa shopData.address
+      if (shopData?.address) message += `%0A%0A📍 ${shopData.address}`;
       
       message += `%0A%0AConfirmado? 👊`;
       
-      const url = `https://wa.me/${phone.replace(/\D/g, '')}?text=${message}`; // Não usa encodeURIComponent aqui para manter as quebras %0A
+      const url = `https://wa.me/${phone.replace(/\D/g, '')}?text=${message}`;
       window.open(url, '_blank');
   };
 
@@ -454,6 +510,13 @@ function ProfessionalPanel() {
     }
   };
 
+  // Ação de Resgate CRM
+  const handleResgateZap = (client) => {
+      if(!client.phone) return toast.error("Cliente sem telefone.");
+      const message = `Olá ${client.name.split(' ')[0]}! 💈%0A%0ASentimos sua falta aqui na ${shopData?.name || 'Barbearia'}.%0A%0AQue tal dar um trato no visual essa semana? Acesse nosso app para agendar! ✂️`;
+      window.open(`https://wa.me/${client.phone.replace(/\D/g, '')}?text=${message}`, '_blank');
+  };
+
   // --- RENDERIZAÇÃO ---
 
   const Loading = () => <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gold-main"></div></div>;
@@ -623,6 +686,42 @@ function ProfessionalPanel() {
             </div>
           )}
       </section>
+  );
+
+  // 5. CRM de Clientes (Renderização)
+  const renderClientsCRM = () => (
+    <section className="card-premium">
+        <div className="flex justify-between items-center mb-6 border-b border-grafite-border pb-4">
+            <h3 className="text-xl font-heading font-semibold text-text-primary flex items-center gap-2"><Megaphone className="text-gold-main" size={20}/> Gestão de Clientes (CRM)</h3>
+            <button onClick={fetchClientsCRM} className="text-xs text-gold-main hover:underline">Atualizar</button>
+        </div>
+        {isLoadingClients ? <Loading /> : clients.length === 0 ? (
+            <p className="text-center text-text-secondary italic py-10">Nenhum histórico de clientes ainda.</p>
+        ) : (
+            <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                    <thead><tr className="text-xs text-text-secondary border-b border-grafite-border"><th className="pb-2 pl-2">Cliente</th><th className="pb-2">Última Visita</th><th className="pb-2">Visitas</th><th className="pb-2">Gasto Total</th><th className="pb-2 text-right pr-2">Ação</th></tr></thead>
+                    <tbody className="text-sm">
+                        {clients.map(client => {
+                            const daysSince = Math.floor((new Date() - client.lastVisit) / (1000 * 60 * 60 * 24));
+                            const isInactive = daysSince > 30;
+                            return (
+                                <tr key={client.id} className="border-b border-grafite-border/30 hover:bg-grafite-surface transition-colors group">
+                                    <td className="py-3 pl-2"><p className="font-bold text-white">{client.name}</p><p className="text-xs text-text-secondary">{client.phone || 'Sem telefone'}</p></td>
+                                    <td className="py-3"><span className={`text-xs px-2 py-1 rounded border ${isInactive ? 'bg-red-950/30 text-red-400 border-red-900/50' : 'bg-green-950/30 text-green-400 border-green-900/50'}`}>{daysSince} dias</span></td>
+                                    <td className="py-3 text-text-primary">{client.visitCount} visitas</td>
+                                    <td className="py-3 text-gold-main font-bold">R$ {client.totalSpent.toFixed(2)}</td>
+                                    <td className="py-3 text-right pr-2">
+                                        {client.phone && <button onClick={() => handleResgateZap(client)} className="text-xs bg-gold-dim text-gold-main px-3 py-1.5 rounded hover:bg-gold-main hover:text-grafite-main transition-colors flex items-center gap-1 ml-auto"><Megaphone size={12}/> Resgatar</button>}
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+        )}
+    </section>
   );
 
   return (

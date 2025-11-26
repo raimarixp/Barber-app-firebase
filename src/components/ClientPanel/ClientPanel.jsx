@@ -1,5 +1,5 @@
 // src/components/ClientPanel/ClientPanel.jsx
-// (COMPLETO - Visual Premium + Carrinho Unificado + Cálculo de Slots via Cloud Function)
+// (CORRIGIDO - Com formulário de busca restaurado na aba Explorar)
 
 import { useState, useEffect } from 'react';
 import { functions, db, auth } from '../../firebase/firebase-config';
@@ -14,11 +14,63 @@ import { useShop } from '../../App.jsx';
 import { toast } from 'sonner';
 import { 
   MapPin, Calendar as CalIcon, Clock, Scissors, 
-  CreditCard, Store, Search, ArrowLeft, Package, Minus, Plus, Image as ImageIcon
+  CreditCard, Store, Search, ArrowLeft, Package, Minus, Plus, Image as ImageIcon,
+  LayoutGrid, Star, ChevronRight, Info 
 } from 'lucide-react';
+
+const daysOfWeek = [
+  'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'
+];
+
+// --- Helper Functions ---
+const timeToMinutes = (time) => {
+  if (!time) return 0;
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+};
+
+const generateTimeSlots = (start, end, duration, bookedSlots, blockedPeriods) => {
+  const slots = [];
+  const startTime = timeToMinutes(start);
+  const endTime = timeToMinutes(end);
+  const serviceDuration = duration;
+  
+  if (serviceDuration <= 0 || startTime >= endTime) return [];
+
+  for (let time = startTime; time < endTime; time += serviceDuration) {
+    const slotStart = time;
+    const slotEnd = time + serviceDuration;
+    if (slotEnd > endTime) break;
+    
+    const slotStartHour = Math.floor(slotStart / 60).toString().padStart(2, '0');
+    const slotStartMin = (slotStart % 60).toString().padStart(2, '0');
+    const slotString = `${slotStartHour}:${slotStartMin}`;
+    
+    if (bookedSlots.includes(slotString)) continue;
+    
+    let isBlocked = false;
+    for (const block of blockedPeriods) {
+      const blockStart = timeToMinutes(block.startTime);
+      const blockEnd = timeToMinutes(block.endTime);
+      if (slotStart < blockEnd && slotEnd > blockStart) {
+        isBlocked = true; break;
+      }
+    }
+    if (isBlocked) continue;
+    
+    slots.push(slotString);
+  }
+  return slots;
+};
 
 function ClientPanel() {
   const { viewingShopId, setViewingShopId } = useShop();
+
+  // --- ESTADOS DE NAVEGAÇÃO ---
+  const [activeTab, setActiveTab] = useState('appointments'); // 'appointments' | 'catalog'
+  
+  // Verifica se está em ambiente Whitelabel (Subdomínio) para bloquear a saída
+  const isBrandedEnvironment = window.location.hostname.split('.').length > 2 && !window.location.hostname.includes('localhost');
 
   // --- ESTADOS DO SISTEMA ---
   const [searchCity, setSearchCity] = useState('');
@@ -163,7 +215,7 @@ function ClientPanel() {
     finally { setIsLoadingProfessionals(false); }
   };
 
-  // 5. Busca Slots (AGORA VIA CLOUD FUNCTION - FIX DE SEGURANÇA)
+  // 5. Busca Slots (Via Cloud Function)
   useEffect(() => {
     if (!selectedProfessional || !selectedDate || !selectedService) return;
     
@@ -172,10 +224,7 @@ function ClientPanel() {
       setAvailableSlots([]);
       
       try {
-        // Chama a Cloud Function
         const getSlotsFn = httpsCallable(functions, 'getAvailableSlots');
-        
-        // Formata a data para string ISO YYYY-MM-DD para enviar
         const dateString = selectedDate.toISOString().split('T')[0];
 
         const result = await getSlotsFn({ 
@@ -192,7 +241,7 @@ function ClientPanel() {
         }
         
       } catch (error) { 
-          console.error("Erro ao calcular slots (Cloud Function):", error);
+          console.error("Erro ao calcular slots:", error);
           toast.error("Erro ao buscar horários disponíveis.");
       } 
       finally { setIsLoadingSlots(false); }
@@ -254,7 +303,7 @@ function ClientPanel() {
           orderItems: orderItems, totalPrice: finalTotal, createdAt: Timestamp.now()
         });
         
-        toast.success("Agendamento Confirmado!");
+        toast.success("Agendamento e Pedido Confirmados!");
         resetSelection();
       }
       
@@ -289,11 +338,18 @@ function ClientPanel() {
     }
   };
 
-  // --- Navegação ---
+  // --- Funções de Navegação ---
   const resetSelection = () => {
     setSelectedService(null); setAvailableProfessionals([]); setSelectedProfessional(null);
     setSelectedDate(new Date()); setAvailableSlots([]); setSelectedSlot(null); setCart([]);
     setCheckoutStage('slots');
+  };
+  
+  const backToProfessionals = () => {
+    setSelectedProfessional(null);
+    setSelectedDate(new Date());
+    setAvailableSlots([]);
+    setSelectedSlot(null);
   };
   
   const handleBackToCatalog = () => {
@@ -302,177 +358,273 @@ function ClientPanel() {
 
   // --- JSX ---
 
-  // ETAPA 0: Catálogo
+  // ETAPA 0: Catálogo / Meus Agendamentos (VISUAL NOVO)
   if (!viewingShopId) {
     return (
-      <div className="max-w-4xl mx-auto p-4 space-y-8 animate-fade-in">
-        {!isLoadingAppointments && myAppointments.length > 0 && (
-          <section className="card-premium">
-             <div className="flex items-center gap-2 border-b border-grafite-border pb-4 mb-4">
-                <CalIcon className="text-gold-main" size={24}/>
-                <h2 className="text-xl font-heading font-bold text-text-primary">Meus Agendamentos</h2>
-             </div>
-             <div className="grid gap-4 sm:grid-cols-2">
-              {myAppointments.map(app => (
-                <div key={app.id} className="bg-grafite-main border border-grafite-border p-4 rounded-lg flex flex-col gap-2 hover:border-gold-main/30 transition-colors">
-                  <div className="flex justify-between items-start">
-                    <span className="text-lg font-bold text-text-primary">{app.startTime.toDate().toLocaleDateString('pt-BR')}</span>
-                    <span className={`text-xs px-2 py-1 rounded-full font-bold border ${app.status === 'checked_in' ? 'bg-green-900/20 border-green-500 text-green-400' : 'bg-blue-900/20 border-blue-500 text-blue-400'}`}>
-                       {app.status === 'checked_in' ? 'Check-in' : 'Confirmado'}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 text-gold-main">
-                     <Clock size={16}/>
-                     <span className="font-mono text-lg">{app.startTime.toDate().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</span>
-                  </div>
-                  {app.orderItems && app.orderItems.length > 1 && (
-                      <div className="text-xs text-text-secondary mt-1 pt-2 border-t border-grafite-border/50">
-                          + {app.orderItems.length - 1} produtos adicionais
-                      </div>
-                  )}
-                </div>
-              ))}
-             </div>
-          </section>
+      <div className="max-w-4xl mx-auto p-4 space-y-6 animate-fade-in">
+        
+        {/* Navegação Superior (Abas) */}
+        <div className="flex p-1 bg-grafite-card border border-grafite-border rounded-xl mb-4 shadow-lg">
+            <button onClick={() => setActiveTab('appointments')} className={`flex-1 py-3 text-sm font-bold rounded-lg transition-all duration-300 flex items-center justify-center gap-2 ${activeTab === 'appointments' ? 'bg-gold-main text-grafite-main shadow-glow' : 'text-text-secondary hover:text-text-primary hover:bg-white/5'}`}>
+                <CalIcon size={18}/> Minha Agenda
+            </button>
+            <button onClick={() => setActiveTab('catalog')} className={`flex-1 py-3 text-sm font-bold rounded-lg transition-all duration-300 flex items-center justify-center gap-2 ${activeTab === 'catalog' ? 'bg-gold-main text-grafite-main shadow-glow' : 'text-text-secondary hover:text-text-primary hover:bg-white/5'}`}>
+                 <LayoutGrid size={18}/> Explorar
+            </button>
+        </div>
+
+        {/* Conteúdo: Agendamentos */}
+        {activeTab === 'appointments' && (
+            <section className="animate-slide-up space-y-4">
+                {!isLoadingAppointments && myAppointments.length > 0 ? (
+                    myAppointments.map(app => (
+                        <div key={app.id} className="bg-grafite-card border border-grafite-border rounded-xl p-5 hover:border-gold-main/50 transition-all duration-300 shadow-lg group relative overflow-hidden">
+                            {/* Barra lateral de status */}
+                            <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${app.status === 'checked_in' ? 'bg-green-500' : 'bg-blue-500'}`}></div>
+                            
+                            <div className="flex justify-between items-start mb-3 pl-2">
+                                <div>
+                                    <h4 className="text-lg font-bold text-white flex items-center gap-2">{app.serviceName}</h4>
+                                    <p className="text-sm text-text-secondary">{app.barbershopName || 'Barbearia'}</p>
+                                </div>
+                                <span className={`text-[10px] px-3 py-1 rounded-full font-bold uppercase tracking-wide border ${app.status === 'checked_in' ? 'bg-green-500/10 border-green-500 text-green-400' : 'bg-blue-500/10 border-blue-500 text-blue-400'}`}>
+                                    {app.status === 'checked_in' ? 'Na Loja' : 'Confirmado'}
+                                </span>
+                            </div>
+                            
+                            <div className="flex items-center gap-4 text-sm text-text-primary pl-2">
+                                <div className="flex items-center gap-2 bg-grafite-surface px-3 py-1.5 rounded-lg border border-grafite-border">
+                                    <CalIcon size={14} className="text-gold-main"/>
+                                    {app.startTime.toDate().toLocaleDateString('pt-BR')}
+                                </div>
+                                <div className="flex items-center gap-2 bg-grafite-surface px-3 py-1.5 rounded-lg border border-grafite-border">
+                                    <Clock size={14} className="text-gold-main"/>
+                                    {app.startTime.toDate().toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}
+                                </div>
+                            </div>
+                        </div>
+                    ))
+                ) : (
+                    <div className="text-center py-16 border-2 border-dashed border-grafite-border rounded-xl bg-grafite-surface/20">
+                        <Clock size={48} className="mx-auto text-text-secondary opacity-20 mb-4"/>
+                        <p className="text-text-secondary text-lg">Nenhum agendamento futuro.</p>
+                        <button onClick={() => setActiveTab('catalog')} className="text-gold-main font-bold hover:underline mt-2">Encontrar Barbearia</button>
+                    </div>
+                )}
+            </section>
         )}
         
-        <section className="card-premium">
-          <div className="text-center mb-8">
-            <h2 className="text-3xl font-heading font-bold text-gold-main mb-2">Encontre sua Barbearia</h2>
-            <p className="text-text-secondary">Busque pelos melhores profissionais da sua cidade.</p>
-          </div>
-          
-          <form onSubmit={handleSearchCity} className="relative max-w-lg mx-auto mb-8"> 
-            <input type="text" id="searchCity" name="searchCity" value={searchCity} onChange={(e) => setSearchCity(e.target.value)} placeholder="Digite sua cidade (ex: São Paulo)" className="input-premium pr-12 h-12"/>
-            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gold-main hover:text-white transition-colors">
-              {isLoadingShops ? <div className="animate-spin h-5 w-5 border-2 border-current border-t-transparent rounded-full"/> : <Search size={24}/>}
-            </button>
-          </form>
-          
-          {searchedCity && (
-            <div className="animate-slide-up">
-              <h3 className="text-lg font-semibold text-text-secondary mb-4">Resultados para "{searchedCity}"</h3>
-              {isLoadingShops ? (
-                 <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gold-main"></div></div>
-              ) : (
-                barbershops.length === 0 ? (
-                  <p className="text-center text-text-secondary italic py-8 bg-grafite-main rounded-lg border border-grafite-border border-dashed">Nenhuma barbearia encontrada.</p>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {barbershops.map(shop => (
-                      <div key={shop.id} className="bg-grafite-main border border-grafite-border rounded-xl overflow-hidden hover:shadow-glow transition-all duration-300 group">
-                        <div className="h-40 overflow-hidden">
-                           <img src={shop.logoUrl} alt={shop.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+        {/* Conteúdo: Catálogo */}
+        {activeTab === 'catalog' && (
+            <section className="animate-slide-up">
+                {/* FORMULÁRIO DE BUSCA RESTAURADO */}
+                <div className="card-premium mb-6">
+                    <h2 className="text-2xl font-heading font-bold text-gold-main mb-4 flex items-center gap-2">
+                        <Search size={24} className="text-gold-main"/> Encontre sua Barbearia
+                    </h2>
+                    <form onSubmit={handleSearchCity} className="flex flex-col sm:flex-row gap-3">
+                        <div className="flex-1">
+                            <input 
+                                type="text" 
+                                value={searchCity} 
+                                onChange={(e) => setSearchCity(e.target.value)}
+                                placeholder="Digite o nome da sua cidade..." 
+                                className="input-premium w-full text-lg h-14"
+                                required
+                            />
                         </div>
-                        <div className="p-5">
-                          <h4 className="text-xl font-bold text-text-primary mb-1">{shop.name}</h4>
-                          <p className="text-sm text-text-secondary mb-2 flex items-center gap-1"><MapPin size={14}/> {shop.cidade}</p>
-                          <p className="text-sm text-text-secondary/70 line-clamp-2 mb-4 min-h-[40px]">{shop.description}</p>
-                          <button onClick={() => setViewingShopId(shop.id)} className="btn-primary w-full py-2 text-sm">Ver Serviços</button>
+                        <button 
+                            type="submit" 
+                            disabled={isLoadingShops}
+                            className="btn-primary h-14 px-8 text-lg font-bold min-w-[140px] flex items-center justify-center gap-2"
+                        >
+                            {isLoadingShops ? (
+                                <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-current"></div>
+                            ) : (
+                                <>
+                                    <Search size={20}/> Buscar
+                                </>
+                            )}
+                        </button>
+                    </form>
+                </div>
+
+                {/* RESULTADOS DA BUSCA */}
+                {searchedCity && (
+                    <div className="space-y-4">
+                        <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                            <MapPin size={18} className="text-gold-main"/> 
+                            Barbearias em {searchedCity}
+                            {barbershops.length > 0 && (
+                                <span className="text-sm text-text-secondary font-normal ml-2">
+                                    ({barbershops.length} encontrada{barbershops.length !== 1 ? 's' : ''})
+                                </span>
+                            )}
+                        </h3>
+                        
+                        {isLoadingShops ? (
+                            <div className="flex justify-center py-10">
+                                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gold-main"></div>
+                            </div>
+                        ) : barbershops.length > 0 ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {barbershops.map(shop => (
+                                    <div 
+                                        key={shop.id} 
+                                        onClick={() => setViewingShopId(shop.id)} 
+                                        className="bg-grafite-card border border-grafite-border rounded-2xl overflow-hidden hover:border-gold-main hover:shadow-glow transition-all duration-300 group cursor-pointer relative"
+                                    >
+                                        <div className="h-48 overflow-hidden relative">
+                                           <img 
+                                               src={shop.logoUrl} 
+                                               alt={shop.name} 
+                                               className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" 
+                                           />
+                                           <div className="absolute inset-0 bg-gradient-to-t from-black/90 to-transparent"></div>
+                                           <div className="absolute bottom-4 left-4 right-4">
+                                               <h4 className="text-xl font-heading font-bold text-white mb-1">{shop.name}</h4>
+                                               <p className="text-xs text-gray-300 flex items-center gap-1 truncate">
+                                                   <MapPin size={12} className="text-gold-main"/> 
+                                                   {shop.address}
+                                               </p>
+                                           </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="text-center py-10 border-2 border-dashed border-grafite-border rounded-xl bg-grafite-surface/20">
+                                <Store size={48} className="mx-auto text-text-secondary opacity-20 mb-4"/>
+                                <p className="text-text-secondary text-lg">Nenhuma barbearia encontrada em {searchedCity}.</p>
+                                <p className="text-text-secondary text-sm mt-2">Tente buscar por outra cidade.</p>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* MENSAGEM INICIAL QUANDO NÃO HÁ BUSCA */}
+                {!searchedCity && (
+                    <div className="text-center py-16 border-2 border-dashed border-grafite-border rounded-xl bg-grafite-surface/20">
+                        <Store size={64} className="mx-auto text-text-secondary opacity-20 mb-4"/>
+                        <h3 className="text-xl font-bold text-text-secondary mb-2">Encontre Barbearias Próximas</h3>
+                        <p className="text-text-secondary mb-6">Digite o nome da sua cidade acima para descobrir as melhores barbearias da região.</p>
+                        <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
+                            <div className="flex items-center gap-2 text-sm text-text-secondary">
+                                <Scissors size={16} className="text-gold-main"/> Serviços Profissionais
+                            </div>
+                            <div className="flex items-center gap-2 text-sm text-text-secondary">
+                                <Star size={16} className="text-gold-main"/> Agendamento Online
+                            </div>
+                            <div className="flex items-center gap-2 text-sm text-text-secondary">
+                                <CreditCard size={16} className="text-gold-main"/> Pagamento Seguro
+                            </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )
-              )}
-            </div>
-          )}
-        </section>
+                    </div>
+                )}
+            </section>
+        )}
       </div>
     );
   }
 
-  // ETAPA 1: Serviços (CARROSSEL)
+  // ETAPA 1: Seleção de Serviços (CARROSSEL HORIZONTAL PREMIUM)
   if (viewingShopId && !selectedService) {
     return (
-      <div className="max-w-5xl mx-auto p-4 animate-fade-in">
-        <button onClick={handleBackToCatalog} className="mb-6 flex items-center text-gold-main hover:underline gap-2 text-sm">
-          <ArrowLeft size={16}/> Voltar ao Catálogo
-        </button>
+      <div className="max-w-5xl mx-auto p-4 animate-fade-in pb-24">
+        {!isBrandedEnvironment && (
+            <button onClick={handleBackToCatalog} className="mb-6 flex items-center text-text-secondary hover:text-gold-main gap-2 text-sm font-medium transition-colors">
+                <ArrowLeft size={18}/> Voltar ao Catálogo
+            </button>
+        )}
         
-        <section className="card-premium">
-          <div className="border-b border-grafite-border pb-4 mb-6">
-             <h2 className="text-2xl font-heading font-bold text-gold-main">Menu de Serviços</h2>
-             <p className="text-text-secondary text-sm">Escolha seu próximo serviço em: <span className="text-text-primary font-semibold">{currentShopData?.name || 'Carregando...'}</span></p>
-          </div>
+        <header className="mb-8">
+             <h2 className="text-3xl font-heading font-bold text-white mb-2">Olá! 👋</h2>
+             <p className="text-text-secondary">Escolha um serviço para começar seu agendamento na <span className="text-gold-main font-semibold">{currentShopData?.name}</span>.</p>
+        </header>
 
-          <div className="flex items-center gap-4 bg-grafite-main p-3 rounded-lg border border-grafite-border mb-6">
-             <Scissors size={24} className="text-gold-main"/>
-             <h3 className="text-lg font-heading font-semibold text-white">Serviços Disponíveis</h3>
-          </div>
+        <section>
+            <div className="flex items-center gap-2 mb-4 px-1">
+                <Scissors size={20} className="text-gold-main"/>
+                <h3 className="text-xl font-bold text-white">Serviços</h3>
+            </div>
 
-          {services.length > 0 ? (
-            <div className="flex overflow-x-auto gap-4 pb-4 custom-scrollbar whitespace-nowrap -mx-4 px-4 md:mx-0 md:px-0">
-              {services.map(service => (
-                <div key={service.id} 
-                     className="w-[220px] flex-shrink-0 bg-grafite-card border border-grafite-border rounded-xl overflow-hidden hover:border-gold-main/50 transition-all cursor-pointer shadow-lg" 
-                     onClick={() => handleSelectService(service)}
-                >
-                  <div className="h-28 overflow-hidden bg-grafite-main flex items-center justify-center border-b border-grafite-border">
-                    {service.imageUrl ? (
-                        <img src={service.imageUrl} alt={service.name} className="w-full h-full object-cover transition-transform duration-300 hover:scale-105"/>
-                    ) : (
-                        <ImageIcon size={32} className="text-text-secondary/20"/>
-                    )}
-                  </div>
-                  
-                  <div className="p-3">
-                    <h4 className="text-sm font-bold text-text-primary truncate">{service.name}</h4>
-                    <div className="flex justify-between items-end mt-2">
-                      <span className="text-gold-main font-bold text-lg">R$ {service.price.toFixed(2)}</span>
-                      <span className="text-xs text-text-secondary bg-grafite-surface px-2 py-1 rounded">{service.duration} min</span>
+            {services.length > 0 ? (
+                <div className="flex overflow-x-auto gap-5 pb-8 custom-scrollbar -mx-4 px-4 md:mx-0 md:px-0 scroll-smooth">
+                {services.map(service => (
+                    <div key={service.id} onClick={() => handleSelectService(service)}
+                         className="min-w-[260px] bg-grafite-card border border-grafite-border rounded-2xl overflow-hidden cursor-pointer group hover:shadow-glow hover:border-gold-main transition-all duration-300 relative flex flex-col"
+                    >
+                        <div className="h-40 overflow-hidden relative bg-grafite-surface">
+                            {service.imageUrl ? (
+                                <img src={service.imageUrl} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"/>
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center text-text-secondary/20"><Scissors size={48}/></div>
+                            )}
+                            <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-md text-white text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1 border border-white/10">
+                                <Clock size={12} className="text-gold-main"/> {service.duration} min
+                            </div>
+                        </div>
+                        
+                        <div className="p-5 flex-1 flex flex-col justify-between bg-gradient-to-b from-grafite-card to-grafite-main">
+                            <h4 className="text-lg font-bold text-white mb-1">{service.name}</h4>
+                            <div className="flex items-center justify-between mt-4">
+                                <span className="text-xl font-bold text-gold-main">R$ {service.price.toFixed(2)}</span>
+                                <div className="w-8 h-8 rounded-full bg-gold-main flex items-center justify-center text-grafite-main shadow-lg group-hover:scale-110 transition-transform">
+                                    <Plus size={18}/>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                  </div>
+                ))}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-center text-text-secondary py-8">Nenhum serviço disponível.</p>
-          )}
-
-          {products.length > 0 && !isLoadingProducts && (
-            <div className="mt-8 p-3 bg-grafite-main rounded-lg border border-grafite-border text-sm text-text-secondary flex items-center gap-2">
-               <Package size={16} className="text-gold-main"/> **{products.length} Produtos disponíveis.** Você poderá adicioná-los após escolher o horário.
-            </div>
-          )}
-
+            ) : (
+                <p className="text-text-secondary italic">Nenhum serviço disponível.</p>
+            )}
         </section>
+        
+        {/* Teaser de Produtos */}
+        {products.length > 0 && (
+            <div className="mt-8 p-4 bg-grafite-card border border-grafite-border rounded-xl flex items-center gap-4 shadow-lg">
+               <div className="w-12 h-12 bg-gold-dim rounded-full flex items-center justify-center text-gold-main">
+                   <Package size={24}/>
+               </div>
+               <div>
+                   <h4 className="text-white font-bold">Produtos Exclusivos</h4>
+                   <p className="text-xs text-text-secondary">Temos {products.length} produtos para você. Adicione no próximo passo!</p>
+               </div>
+            </div>
+        )}
       </div>
     );
   }
 
-  // ETAPA 2: Profissionais
-  if (selectedService && !selectedProfessional) { 
-    return ( 
-        <div className="max-w-5xl mx-auto p-4 animate-fade-in">
-        <button onClick={resetSelection} className="mb-6 flex items-center text-gold-main hover:underline gap-2 text-sm">
-          <ArrowLeft size={16}/> Voltar aos Serviços
+  // [O restante do código permanece igual...]
+  // ETAPA 2: Profissionais (Cards Simples e Elegantes)
+  if (selectedService && !selectedProfessional) {
+    return (
+      <div className="max-w-3xl mx-auto p-4 animate-fade-in">
+        <button onClick={resetSelection} className="mb-6 flex items-center text-text-secondary hover:text-gold-main gap-2 text-sm font-medium transition-colors">
+          <ArrowLeft size={18}/> Voltar
         </button>
-        <section className="card-premium">
-          <div className="border-b border-grafite-border pb-4 mb-6">
-             <h2 className="text-2xl font-heading font-bold text-gold-main">Escolha o Profissional</h2>
-             <p className="text-text-secondary text-sm">Para: <span className="text-text-primary font-semibold">{selectedService?.name}</span></p>
-          </div>
-          {isLoadingProfessionals ? (
-             <div className="flex justify-center py-10"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-gold-main"></div></div>
-          ) : (
-            availableProfessionals.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                {availableProfessionals.map(prof => (
-                  <div key={prof.id} className="bg-grafite-main border border-grafite-border p-6 rounded-xl hover:shadow-glow hover:border-gold-main/50 transition-all cursor-pointer flex flex-col items-center gap-4 text-center group" onClick={() => setSelectedProfessional(prof)}>
-                    <div className="w-16 h-16 rounded-full bg-grafite-surface border-2 border-grafite-border flex items-center justify-center text-2xl font-bold text-gold-main group-hover:border-gold-main transition-colors">
-                      {prof.name.charAt(0).toUpperCase()}
-                    </div>
-                    <h4 className="text-lg font-bold text-text-primary">{prof.name}</h4>
-                    <span className="text-xs text-gold-main border border-gold-main/30 px-3 py-1 rounded-full">Selecionar</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-center text-text-secondary py-8">Nenhum profissional disponível para este serviço.</p>
-            )
-          )}
-        </section>
+        
+        <h2 className="text-2xl font-bold text-white mb-6 text-center">Quem vai te atender?</h2>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {availableProfessionals.length > 0 ? availableProfessionals.map(prof => (
+             <div key={prof.id} onClick={() => setSelectedProfessional(prof)} className="bg-grafite-card border border-grafite-border p-6 rounded-2xl hover:border-gold-main hover:shadow-glow transition-all cursor-pointer flex items-center gap-4 group">
+                <div className="w-16 h-16 rounded-full bg-grafite-surface border-2 border-grafite-border flex items-center justify-center text-2xl font-bold text-gold-main group-hover:border-gold-main transition-colors shadow-lg">
+                   {prof.name.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                   <h4 className="text-lg font-bold text-white group-hover:text-gold-main transition-colors">{prof.name}</h4>
+                   <div className="flex items-center gap-1 text-xs text-text-secondary mt-1">
+                      <Star size={12} className="text-gold-main fill-gold-main"/> Profissional
+                   </div>
+                </div>
+                <ChevronRight className="ml-auto text-text-secondary group-hover:text-gold-main transition-colors"/>
+             </div>
+          )) : <p className="col-span-2 text-center text-text-secondary py-10">Nenhum profissional disponível.</p>}
+        </div>
       </div>
     );
   }
@@ -525,7 +677,7 @@ function ClientPanel() {
     );
   }
 
-  // ETAPA 4: Upsell de Produtos
+  // ETAPA 4: Upsell de Produtos (CATÁLOGO VERTICAL)
   if (selectedService && selectedProfessional && selectedSlot && checkoutStage === 'products') {
     return (
         <div className="max-w-6xl mx-auto p-4 animate-fade-in">
@@ -537,7 +689,7 @@ function ClientPanel() {
           
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             
-            {/* Produtos para Upsell */}
+            {/* Produtos para Upsell (Catálogo Vertical) */}
             <section className="card-premium lg:col-span-2 h-full">
                 <h3 className="text-xl font-heading font-bold text-text-primary mb-4 border-b border-grafite-border pb-2">Produtos da Barbearia</h3>
                 {isLoadingProducts ? (
@@ -581,7 +733,7 @@ function ClientPanel() {
                 )}
             </section>
             
-            {/* Resumo do Carrinho */}
+            {/* Resumo do Carrinho e Botão de Avançar */}
             <section className="lg:col-span-1 space-y-4 h-full">
                 <div className="card-premium sticky top-24">
                     <h3 className="text-lg font-heading font-bold text-text-primary mb-4 border-b border-grafite-border pb-2">Seu Pedido</h3>
@@ -620,7 +772,7 @@ function ClientPanel() {
     );
   }
 
-  // ETAPA 5: Revisão e Pagamento
+  // ETAPA 5: Revisão e Pagamento Unificado
   if (selectedService && selectedProfessional && selectedSlot && checkoutStage === 'review') {
       const isOnlinePaymentEnabled = currentShopData?.onlinePaymentEnabled;
       const isOnlinePaymentRequired = currentShopData?.requirePayment;
@@ -652,6 +804,7 @@ function ClientPanel() {
                       </div>
                   </div>
 
+                  {/* Opções de Pagamento */}
                   <div className="space-y-3">
                       {isOnlinePaymentEnabled && (
                           <button 
@@ -672,7 +825,7 @@ function ClientPanel() {
                               className="w-full flex items-center justify-start gap-3 p-4 rounded-lg border border-grafite-border bg-grafite-main hover:bg-grafite-surface transition-all text-text-primary font-semibold"
                           >
                               <Store size={20} className="text-text-secondary"/>
-                              <span>Pagar R$ {finalTotal.toFixed(2)} na Barbearia</span>
+                              <span>Pagar na Barbearia</span>
                           </button>
                       )}
 
