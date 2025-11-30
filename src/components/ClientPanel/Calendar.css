@@ -1,115 +1,98 @@
 /* src/components/ClientPanel/Calendar.css */
 
-/* Container Principal */
+/* Container do Calendário */
 .react-calendar {
   width: 100%;
-  max-width: 400px;
-  background: #ffffff;
+  background: transparent; /* Fundo transparente para assumir o card */
   border: none;
-  border-radius: 24px; /* Bordas bem arredondadas */
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', sans-serif;
   line-height: 1.125em;
-  padding: 20px;
-  margin: 0 auto; /* Centraliza */
 }
 
-/* Navegação (Topo: Mês/Ano) */
+/* Esconde a navegação padrão do componente (pois criamos a nossa customizada) */
 .react-calendar__navigation {
-  display: flex;
-  height: 50px;
-  margin-bottom: 10px;
+  display: none !important;
 }
 
-.react-calendar__navigation button {
-  min-width: 44px;
-  background: none;
-  font-size: 18px;
-  font-weight: 700;
-  color: #1f2937; /* Cinza Escuro */
-  border-radius: 12px;
-  transition: all 0.2s;
-}
-
-.react-calendar__navigation button:enabled:hover,
-.react-calendar__navigation button:enabled:focus {
-  background-color: #f3f4f6;
-}
-
-.react-calendar__navigation button[disabled] {
-  background-color: #fff;
-  opacity: 0.3;
-}
-
-/* Dias da Semana (Seg, Ter...) */
+/* Dias da Semana (SEG, TER...) */
 .react-calendar__month-view__weekdays {
   text-align: center;
   text-transform: uppercase;
-  font-weight: 800;
-  font-size: 0.7rem;
-  color: #9ca3af; /* Cinza claro */
+  font-weight: 600;
+  font-size: 0.75rem;
+  color: #D4AF37; /* Dourado */
   margin-bottom: 10px;
-  text-decoration: none; /* Remove sublinhado */
-}
-abbr[title] {
-    text-decoration: none;
+  text-decoration: none;
+  letter-spacing: 1px;
 }
 
-/* Dias (Números) */
+abbr[title] {
+    text-decoration: none;
+    cursor: default;
+}
+
+/* Grade de Dias */
+.react-calendar__month-view__days {
+  display: grid !important;
+  grid-template-columns: repeat(7, 1fr); /* Garante alinhamento perfeito */
+  gap: 8px; /* Espaço entre os dias */
+}
+
+/* Botão do Dia (O quadrado) */
 .react-calendar__tile {
+  aspect-ratio: 1 / 1; /* Força ser perfeitamente quadrado */
   max-width: 100%;
-  height: 50px; /* Botões altos para toque */
-  padding: 10px;
-  background: none;
+  background: transparent;
   text-align: center;
-  line-height: 30px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
-  color: #374151;
-  border-radius: 16px; /* Quadrado arredondado */
-  transition: all 0.2s;
+  color: #e5e7eb; /* Branco suave */
+  border-radius: 12px; /* Bordas arredondadas */
+  transition: all 0.2s ease;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  position: relative;
+  border: 1px solid transparent;
 }
 
 /* Hover no dia */
 .react-calendar__tile:enabled:hover,
 .react-calendar__tile:enabled:focus {
-  background-color: #eff6ff; /* Azul bem claro */
-  color: #2563eb;
+  background-color: rgba(212, 175, 55, 0.15); /* Dourado bem transparente */
+  border-color: #D4AF37;
+  color: #D4AF37;
+  transform: scale(1.05);
 }
 
 /* Dia de HOJE */
 .react-calendar__tile--now {
-  background: #fffbeb; /* Amarelo claro */
-  color: #d97706;
-  font-weight: bold;
-  border: 1px solid #fcd34d;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  color: #D4AF37;
 }
 
-.react-calendar__tile--now:enabled:hover,
-.react-calendar__tile--now:enabled:focus {
-  background: #fef3c7;
+/* Dia SELECIONADO */
+.react-calendar__tile--active,
+.react-calendar__tile--active:enabled:hover,
+.react-calendar__tile--active:enabled:focus {
+  background: linear-gradient(135deg, #D4AF37 0%, #aa8a2e 100%) !important; /* Gradiente Dourado */
+  color: #1a1a1a !important; /* Texto escuro para contraste */
+  box-shadow: 0 4px 15px rgba(212, 175, 55, 0.4);
+  font-weight: 800;
+  border: none;
 }
 
-/* Dia SELECIONADO (O principal) */
-.react-calendar__tile--active {
-  background: #2563eb !important; /* Azul Vibrante */
-  color: white !important;
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
-  font-weight: bold;
-  transform: scale(1.05); /* Leve zoom */
+/* Dias de outros meses (Desabilitados visualmente) */
+.react-calendar__month-view__days__day--neighboringMonth {
+  color: #4b5563; /* Cinza bem escuro */
+  opacity: 0.5;
 }
 
 /* Dias Desabilitados (Passado) */
 .react-calendar__tile:disabled {
   background-color: transparent;
-  color: #d1d5db;
-}
-
-/* Remove bordas extras */
-.react-calendar button {
-  border: 0;
-  outline: none;
+  color: #374151;
+  cursor: not-allowed;
 }

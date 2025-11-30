@@ -1,10 +1,10 @@
 // src/components/ProfessionalPanel/ProfessionalPanel.jsx
-// (COMPLETO & CORRIGIDO - Correção de shopProfile e Dados da Loja)
+// (VERSÃO FINAL - Com visualização das Preferências do Cliente: Zen/Papo/Sugestão)
 
 import { useState, useEffect, useCallback } from 'react';
 import { db, auth } from '../../firebase/firebase-config';
 import { 
-  doc, collection, getDocs, updateDoc, setDoc, getDoc,
+  doc, collection, getDocs, updateDoc, getDoc,
   writeBatch, addDoc, onSnapshot,
   query, deleteDoc, Timestamp, where
 } from "firebase/firestore";
@@ -12,8 +12,12 @@ import { useShop } from '../../App.jsx';
 import { toast } from 'sonner'; 
 import { 
     Calendar, Megaphone, Clock, Scissors, Ban, CheckCircle, XCircle, User, Plus, UserPlus, 
-    Zap, DollarSign, TrendingUp, TrendingDown, ClipboardCheck, FileText, Package, Minus, ShoppingBag, MessageCircle
+    TrendingUp, ClipboardCheck, Package, Minus, ChevronLeft, ChevronRight,
+    MessageCircle, VolumeX, Lightbulb, Star, Camera, Video 
 } from 'lucide-react';
+
+import ReactCalendar from 'react-calendar';
+import '../ClientPanel/Calendar.css';
 
 const daysOfWeek = [
   { key: 'sunday', label: 'Domingo' }, { key: 'monday', label: 'Segunda-feira' },
@@ -24,12 +28,38 @@ const daysOfWeek = [
 
 const SERVICE_COMMISSION_RATE = 0.40; 
 
+const uploadImageToCloudinary = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('upload_preset', import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET);
+  const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+  const apiUrl = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
+  try {
+    const response = await fetch(apiUrl, { method: 'POST', body: formData });
+    const data = await response.json();
+    if (data.secure_url) return data.secure_url;
+    else throw new Error(data.error.message || 'Falha no upload');
+  } catch (error) {
+    console.error("Erro no upload:", error);
+    throw error;
+  }
+};
+
 function ProfessionalPanel() {
   const { managedShopId } = useShop();
   const professionalId = auth.currentUser ? auth.currentUser.uid : null;
 
   // --- Estados de Navegação ---
   const [activeTab, setActiveTab] = useState('agenda');
+
+  // Estado da Navegação Principal (Barra Inferior)
+  const [mainTab, setMainTab] = useState('agenda'); // 'agenda' | 'feed' | 'profile'
+
+  // Estados do Perfil
+  const [profileBio, setProfileBio] = useState('');
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState('');
+  const [newProfilePhoto, setNewProfilePhoto] = useState(null);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
 
   // ... CRM ...
   const [isLoadingClients, setIsLoadingClients] = useState(false);
@@ -51,7 +81,42 @@ function ProfessionalPanel() {
   const [workingHours, setWorkingHours] = useState([]); 
   const [blockedTimes, setBlockedTimes] = useState([]); 
   const [todayAppointments, setTodayAppointments] = useState([]);
+  const [selectedAgendaDate, setSelectedAgendaDate] = useState(new Date()); // Estado para controlar a data da agenda
   
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false); // Abre/fecha o calendário
+  const [monthBusyDates, setMonthBusyDates] = useState([]); // Dias com agendamento
+
+  // Navegar dias
+  const changeDate = (days) => {
+      const newDate = new Date(selectedAgendaDate);
+      newDate.setDate(newDate.getDate() + days);
+      setSelectedAgendaDate(newDate);
+  };
+
+  // Carregar "bolinhas" dos agendamentos do mês (Visualização Macro)
+  useEffect(() => {
+      if (!professionalId) return;
+      
+      const startOfMonth = new Date(selectedAgendaDate.getFullYear(), selectedAgendaDate.getMonth(), 1);
+      const endOfMonth = new Date(selectedAgendaDate.getFullYear(), selectedAgendaDate.getMonth() + 1, 0);
+      endOfMonth.setHours(23,59,59);
+
+      const q = query(
+          collection(db, "appointments"),
+          where("professionalId", "==", professionalId),
+          where("startTime", ">=", Timestamp.fromDate(startOfMonth)),
+          where("startTime", "<=", Timestamp.fromDate(endOfMonth)),
+          where("status", "in", ["confirmed", "checked_in", "completed"])
+      );
+
+      const unsubscribe = onSnapshot(q, (snap) => {
+          const dates = snap.docs.map(doc => doc.data().startTime.toDate().toDateString());
+          setMonthBusyDates([...new Set(dates)]); // Remove duplicatas
+      });
+
+      return () => unsubscribe();
+  }, [selectedAgendaDate.getMonth(), professionalId]); // Recarrega se mudar o mês
+
   // --- Estados do Formulário de Bloqueio ---
   const [blockReason, setBlockReason] = useState('Almoço');
   const [blockStartTime, setBlockStartTime] = useState('12:00');
@@ -71,7 +136,8 @@ function ProfessionalPanel() {
   
   // --- Estado de Performance ---
   const [performanceData, setPerformanceData] = useState({
-      totalRevenue: 0, totalCommission: 0, servicesCompleted: 0
+      totalRevenue: 0, totalCommission: 0, servicesCompleted: 0,
+      averageRating: 0, ratingcount: 0, topPreference: 'N/A'
   });
 
   // --- CARREGAMENTO DE DADOS ---
@@ -130,8 +196,14 @@ function ProfessionalPanel() {
     if (!professionalId) return;
     try {
       const docSnap = await getDoc(doc(db, "professionals", professionalId));
-      if (docSnap.exists()) setMyServiceIds(new Set(docSnap.data().services || []));
-    } catch (error) { console.error("Erro meus serviços:", error); }
+      if (docSnap.exists()) {
+          const data = docSnap.data();
+          setMyServiceIds(new Set(data.services || []));
+          // Carrega dados do perfil
+          setProfileBio(data.bio || '');
+          setProfilePhotoUrl(data.photoUrl || '');
+      }
+    } catch (error) { console.error("Erro meus dados:", error); }
   }, [professionalId]);
   
   const fetchBlockedTimes = useCallback(() => {
@@ -160,22 +232,53 @@ function ProfessionalPanel() {
         );
 
         const snapshot = await getDocs(q);
+        
         let totalRevenue = 0;
         let servicesCompleted = 0;
+        let totalStars = 0;
+        let ratedCount = 0;
+        const prefCounts = { chat: 0, silent: 0, suggestion: 0 };
 
         snapshot.forEach(docSnap => {
             const appData = docSnap.data();
             servicesCompleted++;
-            totalRevenue += appData.totalPrice || 0; 
+            totalRevenue += appData.totalPrice || 0;
+            
+            // Cálculo de Avaliação
+            if (appData.rating) {
+                totalStars += appData.rating;
+                ratedCount++;
+            }
+            
+            // Contagem de Preferências
+            if (appData.preference && prefCounts[appData.preference] !== undefined) {
+                prefCounts[appData.preference]++;
+            }
         });
         
         const totalCommission = totalRevenue * SERVICE_COMMISSION_RATE;
-        setPerformanceData({ totalRevenue, totalCommission, servicesCompleted });
+        const averageRating = ratedCount > 0 ? (totalStars / ratedCount).toFixed(1) : 0;
+        
+        // Descobre a preferência vencedora
+        let topPreference = 'Indefinido';
+        if (servicesCompleted > 0) {
+            const maxPref = Object.keys(prefCounts).reduce((a, b) => prefCounts[a] > prefCounts[b] ? a : b);
+            if (prefCounts[maxPref] > 0) {
+                const labels = { chat: 'Papo', silent: 'Zen', suggestion: 'Sugestão' };
+                topPreference = labels[maxPref];
+            }
+        }
+
+        setPerformanceData({ 
+            totalRevenue, totalCommission, servicesCompleted, 
+            averageRating, ratingCount: ratedCount, topPreference 
+        });
 
     } catch (error) { 
       console.error("Erro performance:", error);
-    } 
-    finally { setIsLoadingPerformance(false); }
+    } finally {
+      setIsLoadingPerformance(false);
+    }
   }, [professionalId]);
 
   // --- BUSCA CLIENTES (CRM) ---
@@ -241,14 +344,14 @@ function ProfessionalPanel() {
     
     // Agenda em tempo real
     setIsLoadingAgenda(true);
-    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-    
+    const startOfDay = new Date(selectedAgendaDate); startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(selectedAgendaDate); endOfDay.setHours(23, 59, 59, 999);
+
     const q = query(
       collection(db, "appointments"),
       where("professionalId", "==", professionalId),
-      where("startTime", ">=", Timestamp.fromDate(todayStart)),
-      where("startTime", "<=", Timestamp.fromDate(todayEnd)),
+      where("startTime", ">=", Timestamp.fromDate(startOfDay)),
+      where("startTime", "<=", Timestamp.fromDate(endOfDay)),
       where("status", "in", ["confirmed", "checked_in"])
     );
 
@@ -292,11 +395,10 @@ function ProfessionalPanel() {
       if (unsubscribeBlocks && typeof unsubscribeBlocks === 'function') unsubscribeBlocks();
       unsubscribeAgenda();
     };
-  }, [managedShopId, professionalId, activeTab, fetchWorkingHours, fetchAllServices, fetchMyServices, fetchBlockedTimes, fetchPerformanceData, fetchProducts, fetchClientsCRM]);
+  }, [managedShopId, professionalId, activeTab, selectedAgendaDate, fetchWorkingHours, fetchAllServices, fetchMyServices, fetchBlockedTimes, fetchPerformanceData, fetchProducts, fetchClientsCRM]);
   
   // --- AÇÕES ---
 
-  // Usa shopData em vez de shopProfile
   const handleSendWhatsapp = (app) => {
       const phone = app.clientPhone;
       if (!phone) {
@@ -377,7 +479,8 @@ function ProfessionalPanel() {
             createdBy: "professional",
             createdAt: Timestamp.now(),
             orderItems: orderItems,
-            totalPrice: totalPrice
+            totalPrice: totalPrice,
+            preference: 'chat' // Padrão para manual
         });
 
         toast.success(`Venda/Agendamento registrado! Total: R$ ${totalPrice.toFixed(2)}`);
@@ -421,6 +524,104 @@ function ProfessionalPanel() {
       return newIds;
     });
   };
+
+
+
+
+  // Ação de Salvar Perfil
+  const handleSaveProfile = async () => {
+      setIsSavingProfile(true);
+      try {
+          let url = profilePhotoUrl;
+          if (newProfilePhoto) {
+              const uploadPromise = uploadImageToCloudinary(newProfilePhoto);
+              toast.promise(uploadPromise, { loading: 'Enviando foto...', success: 'Foto enviada!', error: 'Erro na foto' });
+              url = await uploadPromise;
+          }
+          
+          await updateDoc(doc(db, "professionals", professionalId), {
+              bio: profileBio,
+              photoUrl: url
+          });
+          
+          setProfilePhotoUrl(url);
+          setNewProfilePhoto(null);
+          toast.success("Perfil atualizado com sucesso!");
+      } catch (error) {
+          toast.error("Erro ao salvar perfil.");
+      } finally {
+          setIsSavingProfile(false);
+      }
+  };
+
+  // Renderização da Aba Perfil
+  const renderProfile = () => (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Coluna da Esquerda: Foto e Stats */}
+          <section className="card-premium md:col-span-1 flex flex-col items-center text-center">
+              <div className="relative group cursor-pointer mb-4">
+                  <div className="w-32 h-32 rounded-full overflow-hidden border-4 border-grafite-border group-hover:border-gold-main transition-all">
+                      <img 
+                          src={newProfilePhoto ? URL.createObjectURL(newProfilePhoto) : (profilePhotoUrl || 'https://placehold.co/200?text=Foto')} 
+                          className="w-full h-full object-cover"
+                      />
+                  </div>
+                  <label htmlFor="profile_photo_upload" className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 rounded-full transition-opacity cursor-pointer text-white font-bold text-xs">
+                      <Camera size={24} className="mb-1"/>
+                      <input 
+                          id="profile_photo_upload" 
+                          name="profile_photo_upload" 
+                          type="file" 
+                          className="hidden" 
+                          accept="image/*" 
+                          onChange={(e) => setNewProfilePhoto(e.target.files[0])}
+                      />
+                  </label>
+              </div>
+              
+              <h3 className="text-xl font-heading font-bold text-white">{shopData?.name || 'Profissional'}</h3>
+              <p className="text-text-secondary text-sm mb-4">Barbeiro Profissional</p>
+              
+              <div className="flex items-center gap-2 bg-grafite-main px-4 py-2 rounded-full border border-grafite-border mb-6">
+                  <Star size={16} className="text-gold-main fill-gold-main"/>
+                  <span className="font-bold text-white">{performanceData.averageRating || '5.0'}</span>
+                  <span className="text-xs text-text-secondary">({performanceData.ratingCount || 0} avaliações)</span>
+              </div>
+
+          </section>
+
+          {/* Coluna da Direita: Bio e Configurações */}
+          <section className="card-premium md:col-span-2 space-y-6">
+              <div className="border-b border-grafite-border pb-4">
+                  <h3 className="text-xl font-heading font-bold text-white flex items-center gap-2">
+                      <User size={20} className="text-gold-main"/> Sobre Mim
+                  </h3>
+              </div>
+              
+              <div className="space-y-2">
+                  <label htmlFor="profile_bio" className="text-xs text-text-secondary ml-1">Biografia (Aparece para o cliente)</label>
+                  <textarea 
+                      id="profile_bio"
+                      name="profile_bio"
+                      value={profileBio}
+                      onChange={(e) => setProfileBio(e.target.value)}
+                      className="input-premium min-h-[150px] resize-none"
+                      placeholder="Conte um pouco sobre sua experiência, especialidades e estilo..."
+                  />
+              </div>
+
+              <div className="flex justify-end pt-4">
+                  <button 
+                      onClick={handleSaveProfile} 
+                      disabled={isSavingProfile}
+                      className="btn-primary px-8"
+                  >
+                      {isSavingProfile ? 'Salvando...' : 'Salvar Alterações'}
+                  </button>
+              </div>
+          </section>
+      </div>
+  );
   
   const handleSaveMyServices = async () => {
     setIsLoadingServices(true);
@@ -524,15 +725,82 @@ function ProfessionalPanel() {
   // 1. Agenda Section
   const renderAgenda = () => (
       <section className="card-premium h-full min-h-[500px]">
-         <div className="border-b border-grafite-border pb-4 mb-4 flex items-center gap-2 justify-between">
-            <div className="flex items-center gap-2">
-                <Calendar className="text-gold-main" size={20}/>
-                <h3 className="text-xl font-heading font-semibold text-text-primary">Agenda de Hoje</h3>
+         <div className="border-b border-grafite-border pb-4 mb-4 flex flex-col gap-4">
+            
+            {/* Barra de Controle de Data */}
+            <div className="flex items-center justify-between bg-grafite-main p-2 rounded-lg border border-grafite-border">
+                <button 
+                    onClick={() => changeDate(-1)} 
+                    className="p-2 rounded hover:bg-grafite-surface text-text-secondary hover:text-white transition-colors"
+                >
+                    <ChevronLeft size={20}/>
+                </button>
+
+                <button 
+                    onClick={() => setIsCalendarOpen(!isCalendarOpen)}
+                    className="flex items-center gap-2 text-sm font-bold text-white hover:text-gold-main transition-colors"
+                >
+                    <Calendar size={18} className="text-gold-main"/>
+                    <span className="capitalize">
+                        {selectedAgendaDate.toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'long' })}
+                    </span>
+                </button>
+
+                <button 
+                    onClick={() => changeDate(1)}
+                    className="p-2 rounded hover:bg-grafite-surface text-text-secondary hover:text-white transition-colors"
+                >
+                    <ChevronRight size={20}/>
+                </button>
             </div>
-            <span className="text-xs text-text-secondary bg-grafite-surface px-2 py-1 rounded border border-grafite-border">
-                {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
-            </span>
+
+            {/* Calendário Pop-up (Black Gold Style) */}
+            {isCalendarOpen && (
+                <div className="animate-slide-up bg-[#1C1C1C] border border-gray-800 rounded-2xl p-6 shadow-2xl relative z-10 mt-2 w-full max-w-[380px] mx-auto">
+                    {/* Indicadores de Legenda no Topo */}
+                    <div className="flex justify-end gap-3 mb-4 text-[10px] uppercase tracking-wider font-bold">
+                        <span className="flex items-center gap-1 text-gray-400">
+                            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.8)]"></div> Ocupado
+                        </span>
+                        <span className="flex items-center gap-1 text-gold-main">
+                            <div className="w-1.5 h-1.5 bg-gold-main rounded-full shadow-[0_0_8px_rgba(212,175,55,0.8)]"></div> Selecionado
+                        </span>
+                    </div>
+
+                    <ReactCalendar 
+                        onChange={(date) => {
+                            setSelectedAgendaDate(date);
+                            setIsCalendarOpen(false);
+                        }} 
+                        value={selectedAgendaDate} 
+                        showNavigation={false} /* Remove navegação padrão para usar a nossa customizada */
+                        formatShortWeekday={(locale, date) => 
+                            ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'][date.getDay()] /* Letras únicas */
+                        }
+                        className="react-calendar w-full"
+                        tileClassName={({ date, view }) => {
+                            if (view !== 'month') return null;
+                            const dateString = date.toDateString();
+                            // Apenas lógica de classe base aqui, o CSS faz o resto
+                            return null;
+                        }}
+                        tileContent={({ date, view }) => {
+                            // Bolinhas indicadoras (Neon Style)
+                            if (view === 'month' && monthBusyDates.includes(date.toDateString())) {
+                                // Não mostra bolinha se for o dia selecionado (para não poluir)
+                                if (date.toDateString() === selectedAgendaDate.toDateString()) return null;
+                                return (
+                                    <div className="absolute bottom-1.5 flex justify-center w-full">
+                                        <div className="w-1 h-1 bg-blue-500 rounded-full shadow-[0_0_5px_rgba(59,130,246,1)]"></div>
+                                    </div>
+                                );
+                            }
+                        }}
+                    />
+                </div>
+            )}
          </div>
+
          {isLoadingAgenda ? <Loading /> : (
             <div className="flex flex-col gap-4">
               {todayAppointments.length === 0 && <div className="py-12 text-center text-text-secondary border border-dashed border-grafite-border rounded bg-grafite-surface/30"><p className="italic">Agenda vazia hoje.</p><button onClick={() => setActiveTab('booking')} className="mt-4 text-gold-main hover:underline text-sm">Adicionar manualmente</button></div>}
@@ -548,6 +816,26 @@ function ProfessionalPanel() {
                         {app.clientName}
                         {app.clientNameManual && <span className="text-[10px] bg-grafite-surface px-1 rounded text-text-secondary">Avulso</span>}
                     </h4>
+
+                    {/* PREFERÊNCIAS DO CLIENTE (Modo Zen / etc) */}
+                    <div className="flex gap-2 mt-1 mb-2">
+                        {app.preference === 'silent' && (
+                            <span className="text-[10px] flex items-center gap-1 bg-purple-900/30 text-purple-300 px-2 py-0.5 rounded border border-purple-500/30 font-bold uppercase tracking-wider">
+                                <VolumeX size={12} /> Prefere Silêncio
+                            </span>
+                        )}
+                        {app.preference === 'suggestion' && (
+                            <span className="text-[10px] flex items-center gap-1 bg-blue-900/30 text-blue-300 px-2 py-0.5 rounded border border-blue-500/30 font-bold uppercase tracking-wider">
+                                <Lightbulb size={12} /> Quer Sugestão de corte
+                            </span>
+                        )}
+                        {app.preference === 'chat' && (
+                             <span className="text-[10px] flex items-center gap-1 bg-green-900/30 text-green-300 px-2 py-0.5 rounded border border-green-500/30 font-bold uppercase tracking-wider">
+                                <MessageCircle size={12} /> Bate-Papo
+                            </span>
+                        )}
+                    </div>
+
                     <div className="text-sm text-gold-main flex flex-wrap gap-2 mt-1">
                         <span className="flex items-center gap-1"><Scissors size={14}/> {app.serviceName}</span>
                         {app.productsCount > 0 && <span className="flex items-center gap-1 text-text-primary"><Package size={14}/> +{app.productsCount} itens</span>}
@@ -680,9 +968,60 @@ function ProfessionalPanel() {
           <div className="flex items-center gap-2 border-b border-grafite-border pb-4 mb-6"><ClipboardCheck className="text-gold-main"/><h3 className="text-xl font-bold text-text-primary">Performance (Mês)</h3></div>
           {isLoadingPerformance ? <Loading/> : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="p-5 rounded-xl border border-blue-500/50 bg-blue-950/10"><p className="text-xs uppercase text-text-secondary">Serviços</p><p className="text-3xl font-bold text-white">{performanceData.servicesCompleted}</p></div>
-                <div className="p-5 rounded-xl border border-green-500/50 bg-green-950/10"><p className="text-xs uppercase text-text-secondary">Receita Total</p><p className="text-3xl font-bold text-white">R$ {performanceData.totalRevenue.toFixed(2)}</p></div>
-                <div className="p-5 rounded-xl border border-gold-main/50 bg-gold-dim/10"><p className="text-xs uppercase text-text-secondary">Comissão (Est.)</p><p className="text-3xl font-bold text-gold-main">R$ {performanceData.totalCommission.toFixed(2)}</p></div>
+                {/* Serviços */}
+                <div className="p-5 rounded-xl border border-blue-500/50 bg-blue-950/10">
+                    <p className="text-xs uppercase text-text-secondary">Serviços</p>
+                    <p className="text-3xl font-bold text-white">{performanceData.servicesCompleted}</p>
+                </div>
+                
+                {/* Receita */}
+                <div className="p-5 rounded-xl border border-green-500/50 bg-green-950/10">
+                    <p className="text-xs uppercase text-text-secondary">Receita Total</p>
+                    <p className="text-3xl font-bold text-white">R$ {performanceData.totalRevenue.toFixed(2)}</p>
+                </div>
+                
+                {/* Comissão */}
+                <div className="p-5 rounded-xl border border-gold-main/50 bg-gold-dim/10">
+                    <p className="text-xs uppercase text-text-secondary">Comissão (Est.)</p>
+                    <p className="text-3xl font-bold text-gold-main">R$ {performanceData.totalCommission.toFixed(2)}</p>
+                </div>
+
+                {/* --- NOVOS CARDS (LINHA DE BAIXO) --- */}
+                
+                {/* Avaliação Média */}
+                <div className="p-5 rounded-xl border border-yellow-500/50 bg-yellow-950/10 flex items-center justify-between">
+                    <div>
+                        <p className="text-xs uppercase text-text-secondary">Sua Nota</p>
+                        <div className="flex items-end gap-2">
+                            <p className="text-3xl font-bold text-white">{performanceData.averageRating}</p>
+                            <div className="flex pb-1.5 text-yellow-500">
+                                {[...Array(5)].map((_,i) => (
+                                    <Star key={i} size={12} fill={i < Math.round(performanceData.averageRating) ? "currentColor" : "none"} />
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="text-right">
+                        <span className="text-xs text-text-secondary block">{performanceData.ratingCount} avaliações</span>
+                    </div>
+                </div>
+
+                {/* Vibe Principal */}
+                <div className="p-5 rounded-xl border border-purple-500/50 bg-purple-950/10 md:col-span-2">
+                    <p className="text-xs uppercase text-text-secondary">Vibe dos Clientes</p>
+                    <div className="flex items-center gap-3 mt-1">
+                        {performanceData.topPreference === 'Zen' && <VolumeX size={32} className="text-purple-400"/>}
+                        {performanceData.topPreference === 'Papo' && <MessageCircle size={32} className="text-purple-400"/>}
+                        {performanceData.topPreference === 'Sugestão' && <Lightbulb size={32} className="text-purple-400"/>}
+                        
+                        <div>
+                            <p className="text-2xl font-bold text-white">Modo {performanceData.topPreference}</p>
+                            <p className="text-xs text-text-secondary">
+                                A maioria dos seus clientes prefere {performanceData.topPreference === 'Zen' ? 'silêncio' : performanceData.topPreference === 'Papo' ? 'conversar' : 'suas dicas'}.
+                            </p>
+                        </div>
+                    </div>
+                </div>
             </div>
           )}
       </section>
@@ -724,23 +1063,91 @@ function ProfessionalPanel() {
     </section>
   );
 
+
+// Ultimo return
   return (
-    <div className="max-w-7xl mx-auto p-4 space-y-6 animate-fade-in">
-      <h2 className="text-3xl font-heading font-bold text-gold-main mb-6">Painel do Profissional</h2>
-      <div className="flex p-1 bg-grafite-card border border-grafite-border rounded-xl mb-8 overflow-x-auto gap-1">
-        {[{id: 'agenda', label: 'Agenda', Icon: Calendar}, {id: 'booking', label: 'Novo Agendamento', Icon: UserPlus}, {id: 'performance', label: 'Performance', Icon: TrendingUp}, {id: 'config', label: 'Configurações', Icon: Clock}, {id: 'clients', label: 'Clientes', Icon: Megaphone}].map(({id, label, Icon}) => (
-            <button key={id} onClick={() => setActiveTab(id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${activeTab === id ? 'bg-gold-main text-grafite-main shadow-glow' : 'text-text-secondary hover:text-text-primary'}`}>
-                <Icon size={18} /> {label}
-            </button>
-        ))}
+    <div className="max-w-7xl mx-auto p-4 space-y-6 animate-fade-in pb-32"> {/* Padding extra no fundo para a barra */}
+      
+      {/* Título Dinâmico */}
+      <h2 className="text-3xl font-heading font-bold text-gold-main mb-2">
+          {mainTab === 'agenda' ? 'Painel do Profissional' : mainTab === 'feed' ? 'BarberTok' : 'Meu Perfil'}
+      </h2>
+
+      {/* --- CONTEÚDO: AGENDA (Com Menu Superior Original) --- */}
+      {mainTab === 'agenda' && (
+        <div className="animate-fade-in">
+            {/* Menu Deslizante Superior (Mantido apenas para Agenda) */}
+            <div className="flex p-1 bg-grafite-card border border-grafite-border rounded-xl mb-6 overflow-x-auto gap-1 scrollbar-hide">
+                {[
+                    {id: 'agenda', label: 'Agenda', Icon: Calendar}, 
+                    {id: 'booking', label: 'Novo Agendamento', Icon: UserPlus}, 
+                    {id: 'performance', label: 'Performance', Icon: TrendingUp}, 
+                    {id: 'config', label: 'Configurações', Icon: Clock}, 
+                    {id: 'clients', label: 'Clientes', Icon: Megaphone}
+                ].map(({id, label, Icon}) => (
+                    <button key={id} onClick={() => setActiveTab(id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${activeTab === id ? 'bg-gold-main text-grafite-main shadow-glow' : 'text-text-secondary hover:text-text-primary'}`}>
+                        <Icon size={18} /> {label}
+                    </button>
+                ))}
+            </div>
+            
+            <div className="min-h-[500px]">
+                {activeTab === 'agenda' && renderAgenda()}
+                {activeTab === 'booking' && renderBookingManual()}
+                {activeTab === 'config' && renderConfig()}
+                {activeTab === 'performance' && renderPerformance()}
+                {activeTab === 'clients' && renderClientsCRM()}
+            </div>
+        </div>
+      )}
+
+      {/* --- CONTEÚDO: FEED (Placeholder) --- */}
+      {mainTab === 'feed' && (
+          <div className="flex flex-col items-center justify-center py-20 text-center space-y-4 animate-fade-in">
+              <div className="w-24 h-24 bg-grafite-card rounded-full flex items-center justify-center border border-grafite-border shadow-premium">
+                  <Video size={40} className="text-gold-main" />
+              </div>
+              <h3 className="text-2xl font-bold text-white">BarberTok</h3>
+              <p className="text-text-secondary max-w-xs">Em breve você poderá postar seus cortes e tendências aqui para atrair mais clientes.</p>
+          </div>
+      )}
+
+      {/* --- CONTEÚDO: PERFIL --- */}
+      {mainTab === 'profile' && (
+          <div className="animate-fade-in">
+              {renderProfile()}
+          </div>
+      )}
+
+      {/* --- BARRA DE NAVEGAÇÃO INFERIOR FLUTUANTE (DOCK) --- */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-sm bg-[#1C1C1C]/90 backdrop-blur-xl border border-white/10 rounded-full shadow-2xl p-1.5 flex justify-between items-center z-50">
+          
+          <button 
+            onClick={() => setMainTab('agenda')}
+            className={`flex flex-col items-center justify-center w-full h-14 rounded-full transition-all duration-300 group ${mainTab === 'agenda' ? 'bg-gold-main text-grafite-main shadow-glow' : 'text-text-secondary hover:text-white'}`}
+          >
+              <Calendar size={22} strokeWidth={mainTab === 'agenda' ? 2.5 : 2} className="mb-0.5" />
+              {mainTab === 'agenda' && <span className="text-[10px] font-bold leading-none">Agenda</span>}
+          </button>
+
+          <button 
+            onClick={() => setMainTab('feed')}
+            className={`flex flex-col items-center justify-center w-full h-14 rounded-full transition-all duration-300 group ${mainTab === 'feed' ? 'bg-gold-main text-grafite-main shadow-glow' : 'text-text-secondary hover:text-white'}`}
+          >
+              <Video size={22} strokeWidth={mainTab === 'feed' ? 2.5 : 2} className="mb-0.5" />
+              {mainTab === 'feed' && <span className="text-[10px] font-bold leading-none">Feed</span>}
+          </button>
+
+          <button 
+            onClick={() => setMainTab('profile')}
+            className={`flex flex-col items-center justify-center w-full h-14 rounded-full transition-all duration-300 group ${mainTab === 'profile' ? 'bg-gold-main text-grafite-main shadow-glow' : 'text-text-secondary hover:text-white'}`}
+          >
+              <User size={22} strokeWidth={mainTab === 'profile' ? 2.5 : 2} className="mb-0.5" />
+              {mainTab === 'profile' && <span className="text-[10px] font-bold leading-none">Perfil</span>}
+          </button>
+
       </div>
-      <div className="min-h-[500px]">
-          {activeTab === 'agenda' && renderAgenda()}
-          {activeTab === 'booking' && renderBookingManual()}
-          {activeTab === 'config' && renderConfig()}
-          {activeTab === 'performance' && renderPerformance()}
-          {activeTab === 'clients' && renderClientsCRM()}
-      </div>
+
     </div>
   );
 }
