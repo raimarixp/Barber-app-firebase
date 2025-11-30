@@ -1,38 +1,41 @@
-<<<<<<< HEAD
 # Barber App - Plataforma de Agendamento Multi-loja (SaaS)
 
-Uma plataforma completa para barbearias, permitindo gestão de serviços, profissionais e agendamentos online com pagamentos integrados.
+Uma plataforma completa para barbearias, permitindo gestão de serviços, profissionais e agendamentos online com pagamentos integrados, agora com recursos sociais e de fidelização.
 
 ## 🚀 Funcionalidades
 
 ### 🏢 Para Donos de Barbearia (Admin)
-- **Cadastro de Loja:** Crie sua barbearia na plataforma.
-- **Gestão de Perfil:** Edite nome, endereço, descrição e faça upload da logo.
-- **Gestão de Serviços:** Adicione e remova serviços (ex: Corte, Barba) com preços e duração.
-- **Gestão de Equipe:** Convide profissionais por e-mail e gerencie sua equipe.
-- **Pagamentos:** Configure sua conta Mercado Pago (Access Token) para receber pagamentos direto na sua conta.
+- **Cadastro de Loja:** Crie sua barbearia na plataforma (Whitelabel/Subdomínio).
+- **Gestão de Perfil:** Edite nome, endereço, descrição, cores da marca e logo.
+- **Gestão de Serviços & Produtos:** Adicione serviços e produtos para venda (upsell).
+- **Gestão de Equipe:** Convide profissionais por e-mail e gerencie permissões.
+- **Pagamentos:** Configure chaves do Mercado Pago para receber pagamentos online.
 
 ### ✂️ Para Profissionais (Barbeiros)
-- **Gestão de Horários:** Defina seus dias e horários de trabalho.
-- **Leque de Serviços:** Escolha quais serviços da loja você realiza.
-- **Bloqueios de Agenda:** Adicione pausas recorrentes (almoço) ou bloqueios de dia único.
-- **Agenda em Tempo Real:** Visualize seus agendamentos do dia e faça check-in/conclusão de serviços.
+- **Agenda Inteligente:** Navegação por dias, visualização mensal e indicadores de ocupação.
+- **Feed BarberTok:** Publique fotos e vídeos dos seus cortes para atrair clientes.
+- **Perfil Profissional:** Gerencie sua foto de perfil, biografia e veja sua nota média.
+- **Métricas de Performance:** Acompanhe faturamento, comissão, total de atendimentos e sua avaliação (estrelas).
+- **Preferências do Cliente:** Veja antecipadamente se o cliente prefere conversar ("Papo"), silêncio ("Zen") ou quer sugestões.
 
 ### 📅 Para Clientes
-- **Catálogo de Barbearias:** Busque barbearias por cidade.
-- **Agendamento Inteligente:** Escolha serviço, profissional e veja apenas os horários livres (calculados automaticamente).
-- **Pagamento Online:** Pague via PIX ou Cartão (Mercado Pago) para confirmar o agendamento.
-- **Meus Agendamentos:** Visualize seus próximos horários.
+- **App Experience:** Navegação fluida com barra inferior (Dock) estilo app mobile.
+- **BarberTok (Feed):** Descubra cortes através de vídeos/fotos e agende diretamente pelo post.
+- **Agendamento Personalizado (Modo Zen):** Escolha o serviço, profissional e defina sua "vibe" (Conversa, Silêncio ou Sugestão).
+- **Avaliação:** Avalie o atendimento (1 a 5 estrelas) após a conclusão.
+- **Gestão de Perfil:** Atualize sua foto e dados de contato.
+- **Pagamento Online:** Pague via PIX ou Cartão para confirmar.
 
 ---
 
 ## 🛠️ Tecnologias Utilizadas
 
 - **Front-end:** React.js (Vite)
-- **Estilização:** CSS Modules
-- **Back-end (BaaS):** Firebase (Firestore, Authentication, Storage, Cloud Functions)
-- **Pagamentos:** Mercado Pago SDK (Checkout Pro)
-- **Mídia:** Cloudinary (Upload de imagens)
+- **UI/UX:** Tailwind CSS, Lucide Icons, React Calendar (Customizado).
+- **Back-end (BaaS):** Firebase (Firestore, Authentication, Storage, Cloud Functions).
+- **Pagamentos:** Mercado Pago SDK.
+- **Mídia:** Cloudinary (Upload e otimização de imagens/vídeos).
+- **Notificações:** Sonner (Toasts).
 
 ---
 
@@ -40,8 +43,8 @@ Uma plataforma completa para barbearias, permitindo gestão de serviços, profis
 
 ### Pré-requisitos
 - Node.js instalado.
-- Conta no Firebase (plano Blaze para funções de pagamento).
-- Conta no Cloudinary (para imagens).
+- Conta no Firebase (plano Blaze recomendado para Cloud Functions).
+- Conta no Cloudinary (para imagens/vídeos).
 - Conta no Mercado Pago (Developers).
 
 ### Instalação
@@ -87,7 +90,7 @@ Uma plataforma completa para barbearias, permitindo gestão de serviços, profis
     ```bash
     firebase functions:secrets:set MERCADOPAGO_ACCESS_TOKEN
     ```
-3.  Faça o deploy (envio para a nuvem):
+3.  Faça o deploy (envio para a nuvem) ou rode o emulador:
     ```bash
     firebase deploy --only functions
     ```
@@ -99,11 +102,15 @@ Uma plataforma completa para barbearias, permitindo gestão de serviços, profis
 - [x] Autenticação (Cliente/Admin/Profissional)
 - [x] Banco de Dados Multi-loja (Firestore)
 - [x] Regras de Segurança Avançadas
-- [x] Upload de Imagens (Cloudinary)
+- [x] Upload de Imagens e Vídeos (Cloudinary)
 - [x] Motor de Agendamento (Cálculo de Slots)
 - [x] Integração de Pagamento (Mercado Pago)
-- [ ] Métricas e Faturamento (Próximo passo)
-- [ ] Notificações por E-mail (Próximo passo)
+- [x] Feed Social ("BarberTok")
+- [x] Preferências do Cliente (Modo Zen)
+- [x] Sistema de Avaliação (Rating)
+- [x] Métricas de Performance e CRM Básico
+- [ ] Notificações Push/Email (Próximo passo)
+- [ ] Geolocalização Avançada (Mapa de Barbearias)
 
 ---
-Desenvolvido com ❤️ e muita cafeína.
+raimari jr dev 
